@@ -333,13 +333,31 @@
     return { step };
   })();
 
-  function updateMarquee(scrollY) {
-    const offset = (scrollY * 0.18) % 900;
-    if (elements.marqueeLeft) {
+  const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let marqueeLeftPeriod = 0;
+  let marqueeRightPeriod = 0;
+
+  function measureMarqueePeriods() {
+    marqueeLeftPeriod = elements.marqueeLeft?.firstElementChild?.getBoundingClientRect().width || 0;
+    marqueeRightPeriod = elements.marqueeRight?.firstElementChild?.getBoundingClientRect().width || 0;
+  }
+
+  measureMarqueePeriods();
+  window.addEventListener('load', measureMarqueePeriods);
+  window.addEventListener('resize', measureMarqueePeriods);
+  if (document.fonts && document.fonts.ready) {
+    document.fonts.ready.then(measureMarqueePeriods);
+  }
+
+  function updateMarquee(scrollY, nowMs) {
+    const progress = scrollY * 0.22 + (prefersReducedMotion ? 0 : nowMs * 0.032);
+    if (elements.marqueeLeft && marqueeLeftPeriod > 0) {
+      const offset = ((progress % marqueeLeftPeriod) + marqueeLeftPeriod) % marqueeLeftPeriod;
       elements.marqueeLeft.style.transform = `translate3d(${-offset}px, 0, 0)`;
     }
-    if (elements.marqueeRight) {
-      elements.marqueeRight.style.transform = `translate3d(${offset - 450}px, 0, 0)`;
+    if (elements.marqueeRight && marqueeRightPeriod > 0) {
+      const offset = ((progress % marqueeRightPeriod) + marqueeRightPeriod) % marqueeRightPeriod;
+      elements.marqueeRight.style.transform = `translate3d(${offset - marqueeRightPeriod}px, 0, 0)`;
     }
   }
 
@@ -365,7 +383,7 @@
     updateHeroStage(smoothScroll);
     if (heroColorField) heroColorField.step(now * 0.001, dt);
     if (monochromeDotsField) monochromeDotsField.step(now * 0.001, dt);
-    updateMarquee(smoothScroll);
+    updateMarquee(smoothScroll, now);
     updateFooterMonument();
 
     requestAnimationFrame(tick);

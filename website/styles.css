@@ -394,6 +394,7 @@ body {
 
 .marquee-track {
   display: flex;
+  width: max-content;
   white-space: nowrap;
   font-family: var(--display);
   font-size: clamp(1.15rem, 2.5vw, 2.2rem);
@@ -401,6 +402,10 @@ body {
   letter-spacing: 0.04em;
   color: var(--text-muted);
   will-change: transform;
+}
+
+.marquee-track span {
+  flex-shrink: 0;
 }
 
 .marquee-track--reverse {
