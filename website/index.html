@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Droply — Прямой Wi-Fi поток между Android и MacBook</title>
+  <meta name="description" content="Простой и быстрый способ передавать файлы, папки и заметки между Android и MacBook по одному Wi-Fi.">
+  <link rel="icon" type="image/png" href="assets/droply-icon.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Antonio:wght@600;700&family=Manrope:wght@300;400;500;600;700&family=Unbounded:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css?v=25">
+</head>
+<body>
+  <div class="ambient-noise" aria-hidden="true"></div>
+
+  <main>
+    <!-- BLOCK 01: PURE BLACK HERO WITH WANDERING AMBIENT COLOR -->
+    <section id="hero" class="hero-stage" data-scroll-section="hero">
+      <canvas id="heroColorCanvas" class="hero-color-canvas" aria-hidden="true"></canvas>
+
+      <div class="container hero-shell">
+        <div class="hero-centerpiece" id="heroCenterpiece">
+          <h1 class="hero-wordmark" id="heroWordmark">DROPLY</h1>
+        </div>
+
+        <div class="hero-bottom-bar" id="heroBottomBar">
+          <p class="hero-lead">
+            Передача файлов, целых папок и заметок между Android и MacBook
+            напрямую по вашему <span class="nowrap">Wi&#8209;Fi</span>. Без проводов и лишних шагов.
+          </p>
+          <div class="hero-actions">
+            <a href="#download" class="pill-cta pill-cta--ghost">
+              <span>Установить</span>
+              <span class="cta-arrow">↓</span>
+            </a>
+            <a href="#bridge-pair" class="pill-cta pill-cta--primary">
+              <span>Смотреть дальше</span>
+              <span class="cta-arrow">↓</span>
+            </a>
+          </div>
+        </div>
+      </div>
+
+      <div class="hero-bottom-fade" aria-hidden="true"></div>
+    </section>
+
+    <!-- BLOCK 02: TEXT ON LEFT + ANDROID (GREEN) <-> APPLE (WHITE) BRIDGE ON RIGHT -->
+    <section id="bridge-pair" class="pair-section" data-reveal>
+      <div class="container">
+        <div class="pair-layout">
+          <div class="pair-copy">
+            <h2 class="manifesto-text">
+              Зачем отправлять свои 4 ГБ через сервер на другом континенте, если Android и MacBook лежат
+              <span class="accent-highlight">в тридцати сантиметрах</span> друг от друга?
+            </h2>
+            <p class="pair-note">
+              Подключение работает исключительно в связке Android и MacBook — файлы идут по прямой локальной сети в обе стороны и никуда не выгружаются.
+            </p>
+          </div>
+
+          <div class="pair-diagram" aria-label="Прямое двустороннее соединение только между Android и MacBook">
+            <!-- Green Android Icon -->
+            <div class="device-node" aria-hidden="true">
+              <div class="device-glyph">
+                <svg class="device-svg device-svg--android" viewBox="0 0 24 24">
+                  <defs>
+                    <linearGradient id="androidGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+                      <stop offset="0%" stop-color="#52EE98" />
+                      <stop offset="100%" stop-color="#2BBF6A" />
+                    </linearGradient>
+                  </defs>
+                  <path fill="url(#androidGrad)" d="M17.523 15.341a.999.999 0 1 1 0-1.998.999.999 0 0 1 0 1.998m-11.046 0a.999.999 0 1 1 0-1.998.999.999 0 0 1 0 1.998M17.87 9.47l1.825-3.162a.38.38 0 0 0-.139-.519.38.38 0 0 0-.52.139l-1.849 3.204A11.46 11.46 0 0 0 12 8.133c-1.854 0-3.6.373-5.187.999L4.964 5.928a.38.38 0 0 0-.52-.139.38.38 0 0 0-.139.519L6.13 9.47C2.968 11.17.826 14.374.5 18.14h23c-.326-3.766-2.468-6.97-5.63-8.67"/>
+                </svg>
+              </div>
+            </div>
+
+            <!-- Static White Bidirectional Arrows -->
+            <div class="bridge-link" aria-hidden="true">
+              <svg class="bridge-bidir-svg" viewBox="0 0 84 32" fill="none">
+                <line x1="6" y1="10" x2="76" y2="10" stroke="#FFFFFF" stroke-width="1.8" stroke-linecap="round"/>
+                <polyline points="69 4 77 10 69 16" stroke="#FFFFFF" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                <line x1="78" y1="22" x2="8" y2="22" stroke="#FFFFFF" stroke-width="1.8" stroke-linecap="round"/>
+                <polyline points="15 16 7 22 15 28" stroke="#FFFFFF" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </div>
+
+            <!-- White Apple Icon -->
+            <div class="device-node" aria-hidden="true">
+              <div class="device-glyph">
+                <svg class="device-svg device-svg--apple" viewBox="0 0 24 24" fill="#FFFFFF">
+                  <path d="M16.365 1.43c0 1.14-.493 2.27-1.177 3.08-.744.9-1.99 1.57-2.987 1.57-.12 0-.23-.02-.3-.03-.01-.06-.04-.22-.04-.39 0-1.15.572-2.27 1.206-2.98.804-.94 2.142-1.64 3.248-1.68.03.13.05.28.05.43zm4.565 15.71c-.03.07-.463 1.58-1.518 3.12-.945 1.34-1.94 2.71-3.43 2.71-1.517 0-1.9-.88-3.63-.88-1.698 0-2.302.91-3.67.91-1.377 0-2.332-1.26-3.428-2.8-1.287-1.82-2.323-4.63-2.323-7.28 0-4.28 2.797-6.55 5.552-6.55 1.448 0 2.675.95 3.6.95.865 0 2.222-1.01 3.902-1.01.613 0 2.886.06 4.374 2.19-.13.09-2.383 1.37-2.383 4.19 0 3.26 2.854 4.42 2.955 4.45z"/>
+                </svg>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- BLOCK 03: WHITE BACKGROUND + UNIFORM SOLID BLACK CURSOR-FOLLOWING DOTS -->
+    <section id="direct" class="monolith-section">
+      <div class="container-wide">
+        <article class="monolith-card monolith-card--interactive" id="interactiveBridgeCard">
+          <canvas id="bridgeCanvas" class="bridge-canvas" aria-hidden="true"></canvas>
+
+          <div class="monolith-overlay monolith-overlay--center">
+            <h2 class="monolith-title">Прямой мост<br>по <span class="nowrap">Wi&#8209;Fi</span></h2>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <!-- BLOCK 04: REAL UNIQUE FEATURES DIRECTLY BELOW BLOCK 03 -->
+    <section id="specs" class="specs-section" data-reveal>
+      <div class="container">
+        <div class="specs-header">
+          <blockquote class="app-quote">
+            То, чего нет в браузерных обменниках и облаках —
+            <span class="accent-highlight">реальные возможности Droply, написанные нативно под Android и MacBook.</span>
+          </blockquote>
+        </div>
+
+        <div class="spec-grid">
+          <div class="spec-row" data-spotlight>
+            <span class="spec-index">01</span>
+            <h3 class="spec-name">Не засыпает и не рвётся в фоне</h3>
+            <p class="spec-value">MacBook блокирует переход в App Nap и сон во время передачи, а живой прогресс отображается в строке меню и прямо на иконке в Dock — приложение можно свернуть.</p>
+          </div>
+          <div class="spec-row" data-spotlight>
+            <span class="spec-index">02</span>
+            <h3 class="spec-name">Целые папки потоком по 256 КБ</h3>
+            <p class="spec-value">Передача целых деревьев каталогов с сохранением вложенной структуры, без сжатия качества, без лимита по размеру и с проверкой контрольной суммы SHA‑256 каждого файла.</p>
+          </div>
+          <div class="spec-row" data-spotlight>
+            <span class="spec-index">03</span>
+            <h3 class="spec-name">Направленное шифрование AES‑256‑GCM</h3>
+            <p class="spec-value">Раздельные ключи на отправку и приём через HKDF‑SHA256, защита от повтора пакетов и автоматическая санитизация путей и скрытых Unicode‑символов в именах файлов.</p>
+          </div>
+          <div class="spec-row" data-spotlight>
+            <span class="spec-index">04</span>
+            <h3 class="spec-name">Текстовые заметки и согласие до записи</h3>
+            <p class="spec-value">Встроенная отправка .txt‑заметок в обе стороны и обязательное подтверждение приёма партии на экране получателя — чужие или случайные файлы не попадут на диск.</p>
+          </div>
+          <div class="spec-row" data-spotlight>
+            <span class="spec-index">05</span>
+            <h3 class="spec-name">Уведомления поверх окон без потери фокуса</h3>
+            <p class="spec-value">Плавающий баннер на MacBook сообщает о завершении загрузки поверх полноэкранных окон и не перехватывает фокус, пока вы печатаете.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- BLOCK 05: REAL INSTALLERS FOR ANDROID & MACOS -->
+    <section id="download" class="download-section" data-reveal>
+      <div class="container">
+        <div class="download-header">
+          <h2 class="download-title">Установите Droply на оба устройства</h2>
+          <p class="download-lead">Готовые сборки прямо из репозитория проекта — без регистрации, подписок и сторонних магазинов.</p>
+        </div>
+
+        <div class="download-grid">
+          <!-- Android APK Card -->
+          <article class="download-card" id="downloadAndroid">
+            <div class="download-card-top">
+              <div class="download-icon" aria-hidden="true">
+                <svg class="download-svg download-svg--android" viewBox="0 0 24 24">
+                  <defs>
+                    <linearGradient id="androidInstallGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+                      <stop offset="0%" stop-color="#52EE98" />
+                      <stop offset="100%" stop-color="#2BBF6A" />
+                    </linearGradient>
+                  </defs>
+                  <path fill="url(#androidInstallGrad)" d="M17.523 15.341a.999.999 0 1 1 0-1.998.999.999 0 0 1 0 1.998m-11.046 0a.999.999 0 1 1 0-1.998.999.999 0 0 1 0 1.998M17.87 9.47l1.825-3.162a.38.38 0 0 0-.139-.519.38.38 0 0 0-.52.139l-1.849 3.204A11.46 11.46 0 0 0 12 8.133c-1.854 0-3.6.373-5.187.999L4.964 5.928a.38.38 0 0 0-.52-.139.38.38 0 0 0-.139.519L6.13 9.47C2.968 11.17.826 14.374.5 18.14h23c-.326-3.766-2.468-6.97-5.63-8.67"/>
+                </svg>
+              </div>
+              <div>
+                <h3 class="download-platform">Android</h3>
+                <p class="download-meta">Версия 1.0 · Android 8.0+ · APK · 23 МБ</p>
+              </div>
+            </div>
+            <p class="download-hint">Скачайте установочный файл на смартфон, откройте его и подтвердите установку приложения.</p>
+            <div class="download-cta-row">
+              <a href="downloads/Droply-Android.apk" download="Droply-Android.apk" class="pill-cta pill-cta--primary">
+                <span>Скачать APK</span>
+                <span class="cta-arrow">↓</span>
+              </a>
+            </div>
+          </article>
+
+          <!-- macOS DMG Card -->
+          <article class="download-card" id="downloadMac">
+            <div class="download-card-top">
+              <div class="download-icon" aria-hidden="true">
+                <svg class="download-svg download-svg--apple" viewBox="0 0 24 24" fill="#FFFFFF">
+                  <path d="M16.365 1.43c0 1.14-.493 2.27-1.177 3.08-.744.9-1.99 1.57-2.987 1.57-.12 0-.23-.02-.3-.03-.01-.06-.04-.22-.04-.39 0-1.15.572-2.27 1.206-2.98.804-.94 2.142-1.64 3.248-1.68.03.13.05.28.05.43zm4.565 15.71c-.03.07-.463 1.58-1.518 3.12-.945 1.34-1.94 2.71-3.43 2.71-1.517 0-1.9-.88-3.63-.88-1.698 0-2.302.91-3.67.91-1.377 0-2.332-1.26-3.428-2.8-1.287-1.82-2.323-4.63-2.323-7.28 0-4.28 2.797-6.55 5.552-6.55 1.448 0 2.675.95 3.6.95.865 0 2.222-1.01 3.902-1.01.613 0 2.886.06 4.374 2.19-.13.09-2.383 1.37-2.383 4.19 0 3.26 2.854 4.42 2.955 4.45z"/>
+                </svg>
+              </div>
+              <div>
+                <h3 class="download-platform">MacBook</h3>
+                <p class="download-meta">Версия 1.0 · macOS 14+ (Apple Silicon) · DMG · 2.3 МБ</p>
+              </div>
+            </div>
+            <p class="download-hint">Откройте образ DMG и перетащите Droply в папку «Программы». При первом запуске откройте через правый клик.</p>
+            <div class="download-cta-row">
+              <a href="downloads/Droply-macOS.dmg" download="Droply-macOS.dmg" class="pill-cta pill-cta--primary">
+                <span>Скачать DMG</span>
+                <span class="cta-arrow">↓</span>
+              </a>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- KINETIC SCROLL-DRIVEN MARQUEE -->
+    <section class="marquee-section" aria-hidden="true">
+      <div class="marquee-track" id="marqueeLeft">
+        <span>ANDROID + MACBOOK &nbsp;·&nbsp; HKDF-SHA256 &nbsp;·&nbsp; AES-256-GCM &nbsp;·&nbsp; 256 KB STREAM &nbsp;·&nbsp; SHA-256 &nbsp;·&nbsp;</span>
+        <span>ANDROID + MACBOOK &nbsp;·&nbsp; HKDF-SHA256 &nbsp;·&nbsp; AES-256-GCM &nbsp;·&nbsp; 256 KB STREAM &nbsp;·&nbsp; SHA-256 &nbsp;·&nbsp;</span>
+      </div>
+      <div class="marquee-track marquee-track--reverse" id="marqueeRight">
+        <span>MACOS MENU BAR &nbsp;·&nbsp; DOCK BADGE % &nbsp;·&nbsp; ANDROID CAMERAX QR &nbsp;·&nbsp; NON-ACTIVATING TOAST &nbsp;·&nbsp;</span>
+        <span>MACOS MENU BAR &nbsp;·&nbsp; DOCK BADGE % &nbsp;·&nbsp; ANDROID CAMERAX QR &nbsp;·&nbsp; NON-ACTIVATING TOAST &nbsp;·&nbsp;</span>
+      </div>
+    </section>
+  </main>
+
+  <!-- FOOTER WITH MONUMENTAL NARROW DROPLY WORDMARK -->
+  <footer class="site-footer" id="footerMonument">
+    <div class="footer-wordmark-wrap" id="footerWordmarkWrap" aria-label="Droply">
+      <div class="footer-wordmark" id="footerWordmark">DROPLY</div>
+    </div>
+    <div class="footer-bottom-shadow" aria-hidden="true"></div>
+  </footer>
+
+  <script src="app.js?v=25" defer></script>
+</body>
+</html>

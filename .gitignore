@@ -1,0 +1,26 @@
+# macOS system files
+.DS_Store
+**/.DS_Store
+.AppleDouble
+.LSOverride
+
+# Swift / macOS build artifacts
+macOS/.build/
+macOS/build/
+*.xcodeproj
+*.xcworkspace
+
+# Android / Gradle build artifacts & local paths
+Android/.gradle/
+Android/build/
+Android/app/build/
+Android/local.properties
+Android/.idea/
+Android/*.iml
+Android/.kotlin/
+*.hprof
+
+# Temporary / editor files
+*.log
+*.swp
+*~
