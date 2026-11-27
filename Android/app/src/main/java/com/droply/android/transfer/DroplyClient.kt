@@ -113,6 +113,12 @@ data class IncomingBatchRequestUi(
     val previewName: String?
 )
 
+@Immutable
+data class UpdateCheckBannerUi(
+    val message: String,
+    val isError: Boolean = false
+)
+
 private class IncomingReceiveSession(
     val batch: BatchStart,
     var approved: Boolean? = null,
@@ -178,6 +184,9 @@ class DroplyClient {
 
     private val _isCheckingForUpdates = MutableStateFlow(false)
     val isCheckingForUpdates: StateFlow<Boolean> = _isCheckingForUpdates.asStateFlow()
+
+    private val _updateCheckBanner = MutableStateFlow<UpdateCheckBannerUi?>(null)
+    val updateCheckBanner: StateFlow<UpdateCheckBannerUi?> = _updateCheckBanner.asStateFlow()
 
     @Volatile
     private var lastUpdateCheckMs: Long = 0L
@@ -357,6 +366,10 @@ class DroplyClient {
     fun clearMessages() {
         _statusMessage.value = null
         _errorMessage.value = null
+    }
+
+    fun clearUpdateCheckBanner() {
+        _updateCheckBanner.value = null
     }
 
     fun setDeviceName(name: String) {
@@ -1375,8 +1388,10 @@ class DroplyClient {
         val ctx = context.applicationContext
         if (!AppUpdateChecker.isConfigured()) {
             if (userInitiated) {
-                _errorMessage.value = null
-                _statusMessage.value = "Ссылка на GitHub ещё не настроена (версия ${currentAppVersion(ctx)})"
+                _updateCheckBanner.value = UpdateCheckBannerUi(
+                    message = "Ссылка на GitHub ещё не настроена (версия ${currentAppVersion(ctx)})",
+                    isError = false
+                )
             }
             return
         }
@@ -1386,6 +1401,9 @@ class DroplyClient {
             return
         }
         if (_isCheckingForUpdates.value) return
+        if (userInitiated) {
+            _updateCheckBanner.value = null
+        }
         _isCheckingForUpdates.value = true
 
         scope.launch {
@@ -1402,6 +1420,7 @@ class DroplyClient {
                     lastUpdateCheckMs = System.currentTimeMillis()
                     val info = outcome.info
                     _availableUpdate.value = info
+                    _updateCheckBanner.value = null
                     val signature = info.promptSignature
                     if (userInitiated || lastPromptedUpdateVersion != signature) {
                         lastPromptedUpdateVersion = signature
@@ -1413,19 +1432,26 @@ class DroplyClient {
                     lastUpdateCheckMs = System.currentTimeMillis()
                     _availableUpdate.value = null
                     if (userInitiated) {
-                        _errorMessage.value = null
-                        _statusMessage.value = "У вас установлена актуальная версия (${currentAppVersion(ctx)})"
+                        _updateCheckBanner.value = UpdateCheckBannerUi(
+                            message = "У вас установлена актуальная версия (${currentAppVersion(ctx)})",
+                            isError = false
+                        )
                     }
                 }
                 com.droply.android.update.UpdateCheckOutcome.NotConfigured -> {
                     if (userInitiated) {
-                        _errorMessage.value = null
-                        _statusMessage.value = "Ссылка на GitHub ещё не настроена (версия ${currentAppVersion(ctx)})"
+                        _updateCheckBanner.value = UpdateCheckBannerUi(
+                            message = "Ссылка на GitHub ещё не настроена (версия ${currentAppVersion(ctx)})",
+                            isError = false
+                        )
                     }
                 }
                 com.droply.android.update.UpdateCheckOutcome.NetworkFailed -> {
                     if (userInitiated) {
-                        _errorMessage.value = "Не удалось связаться с GitHub для проверки обновлений"
+                        _updateCheckBanner.value = UpdateCheckBannerUi(
+                            message = "Не удалось связаться с GitHub для проверки обновлений",
+                            isError = true
+                        )
                     }
                 }
             }

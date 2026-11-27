@@ -115,6 +115,7 @@ import com.droply.android.transfer.FileTreeCollector
 import com.droply.android.transfer.IncomingBatchRequestUi
 import com.droply.android.transfer.SentFileRecord
 import com.droply.android.transfer.TransferProgressUi
+import com.droply.android.transfer.UpdateCheckBannerUi
 import com.droply.android.update.AppUpdateInfo
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -189,6 +190,7 @@ fun DroplyScreen(
     incomingRequestFlow: StateFlow<IncomingBatchRequestUi?>,
     statusMessageFlow: StateFlow<String?>,
     errorMessageFlow: StateFlow<String?>,
+    updateCheckBannerFlow: StateFlow<UpdateCheckBannerUi?>,
     availableUpdateFlow: StateFlow<AppUpdateInfo?>,
     showUpdatePromptFlow: StateFlow<Boolean>,
     isCheckingUpdatesFlow: StateFlow<Boolean>,
@@ -200,6 +202,7 @@ fun DroplyScreen(
     pendingConfirmation: PendingConfirmationUi?,
     onDismissConfirmation: () -> Unit,
     onDismissBanner: () -> Unit,
+    onDismissUpdateBanner: () -> Unit,
     onOpenScanner: () -> Unit,
     onPickFiles: () -> Unit,
     onPickFolder: () -> Unit,
@@ -215,6 +218,7 @@ fun DroplyScreen(
     val history by historyFlow.collectAsState()
     val statusMessage by statusMessageFlow.collectAsState()
     val errorMessage by errorMessageFlow.collectAsState()
+    val updateCheckBanner by updateCheckBannerFlow.collectAsState()
     val incomingRequest by incomingRequestFlow.collectAsState()
     val availableUpdate by availableUpdateFlow.collectAsState()
     val showUpdatePrompt by showUpdatePromptFlow.collectAsState()
@@ -461,9 +465,8 @@ fun DroplyScreen(
             currentVersionLabel = currentVersionLabel,
             availableUpdate = availableUpdate,
             isCheckingUpdates = isCheckingUpdates,
-            statusMessage = statusMessage,
-            errorMessage = errorMessage,
-            onDismissBanner = onDismissBanner,
+            updateBanner = updateCheckBanner,
+            onDismissUpdateBanner = onDismissUpdateBanner,
             onCheckForUpdates = onCheckForUpdates,
             onOpenUpdatePrompt = {
                 onShowSettingsChange(false)
@@ -998,9 +1001,8 @@ private fun SettingsSheetOverlay(
     currentVersionLabel: String,
     availableUpdate: AppUpdateInfo?,
     isCheckingUpdates: Boolean,
-    statusMessage: String?,
-    errorMessage: String?,
-    onDismissBanner: () -> Unit,
+    updateBanner: UpdateCheckBannerUi?,
+    onDismissUpdateBanner: () -> Unit,
     onCheckForUpdates: () -> Unit,
     onOpenUpdatePrompt: () -> Unit,
     onToggleTheme: () -> Unit,
@@ -1112,15 +1114,21 @@ private fun SettingsSheetOverlay(
                     }
 
                     AnimatedVisibility(
-                        visible = errorMessage != null || statusMessage != null,
+                        visible = updateBanner != null,
                         enter = expandVertically(tween(180)) + fadeIn(tween(180)),
                         exit = shrinkVertically(tween(140)) + fadeOut(tween(140))
                     ) {
-                        StatusBanner(
-                            text = errorMessage ?: statusMessage.orEmpty(),
-                            isError = errorMessage != null,
-                            onDismiss = onDismissBanner
-                        )
+                        var renderedBanner by remember { mutableStateOf<UpdateCheckBannerUi?>(null) }
+                        if (updateBanner != null) {
+                            renderedBanner = updateBanner
+                        }
+                        renderedBanner?.let { banner ->
+                            StatusBanner(
+                                text = banner.message,
+                                isError = banner.isError,
+                                onDismiss = onDismissUpdateBanner
+                            )
+                        }
                     }
 
                     // 1. Theme toggle (locked dimensions + reports center for circular reveal)

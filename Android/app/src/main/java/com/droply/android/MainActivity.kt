@@ -332,6 +332,7 @@ class MainActivity : ComponentActivity() {
                             incomingRequestFlow = client.incomingRequest,
                             statusMessageFlow = client.statusMessage,
                             errorMessageFlow = client.errorMessage,
+                            updateCheckBannerFlow = client.updateCheckBanner,
                             availableUpdateFlow = client.availableUpdate,
                             showUpdatePromptFlow = client.showUpdatePrompt,
                             isCheckingUpdatesFlow = client.isCheckingForUpdates,
@@ -347,6 +348,7 @@ class MainActivity : ComponentActivity() {
                             pendingConfirmation = pendingConfirmation,
                             onDismissConfirmation = remember { { pendingConfirmation = null } },
                             onDismissBanner = remember(client) { { client.clearMessages() } },
+                            onDismissUpdateBanner = remember(client) { { client.clearUpdateCheckBanner() } },
                             onOpenScanner = remember(context) {
                                 {
                                     val hasPerm = ContextCompat.checkSelfPermission(
