@@ -47,9 +47,12 @@ import androidx.core.view.WindowCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import android.widget.Toast
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.droply.android.transfer.AndroidFileSaver
 import com.droply.android.transfer.ConnectionState
 import com.droply.android.transfer.FileTreeCollector
+import com.droply.android.transfer.SentFileRecord
 import com.droply.android.transfer.TransferItem
 import com.droply.android.ui.DroplyScreen
 import com.droply.android.ui.DroplyTheme
@@ -79,6 +82,7 @@ class MainActivity : ComponentActivity() {
             var showScanner by rememberSaveable { mutableStateOf(false) }
             var showSettings by rememberSaveable { mutableStateOf(false) }
             var pendingConfirmation by remember { mutableStateOf<PendingConfirmationUi?>(null) }
+            var previewPhotoRecord by remember { mutableStateOf<SentFileRecord?>(null) }
             var themeButtonOrigin by remember { mutableStateOf<Offset?>(null) }
             var themeRevealActive by remember { mutableStateOf(false) }
             var themeRevealOrigin by remember { mutableStateOf(Offset.Zero) }
@@ -112,12 +116,17 @@ class MainActivity : ComponentActivity() {
                 showScanner = false
             }
 
-            BackHandler(enabled = !showScanner && showSettings) {
+            BackHandler(enabled = !showScanner && previewPhotoRecord != null) {
+                previewPhotoRecord = null
+            }
+
+            BackHandler(enabled = !showScanner && previewPhotoRecord == null && showSettings) {
                 showSettings = false
             }
 
             BackHandler(
                 enabled = !showScanner &&
+                    previewPhotoRecord == null &&
                     !showSettings &&
                     (isTransferring || connectionState is ConnectionState.Connected)
             ) {
@@ -290,6 +299,20 @@ class MainActivity : ComponentActivity() {
                             isDarkTheme = dark,
                             showSettings = showSettings,
                             onShowSettingsChange = { showSettings = it },
+                            previewPhotoRecord = previewPhotoRecord,
+                            onPreviewPhoto = { previewPhotoRecord = it },
+                            onClosePhotoPreview = { previewPhotoRecord = null },
+                            onOpenInFileManager = remember(appCtx) {
+                                { record ->
+                                    if (!AndroidFileSaver.openInFileManager(appCtx, record)) {
+                                        Toast.makeText(
+                                            appCtx,
+                                            "Файл сохранён в Загрузки/Droply",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                    }
+                                }
+                            },
                             onToggleTheme = { triggerRadialThemeToggle() },
                             onThemeButtonPositioned = { pos ->
                                 if (trackOrigin) {

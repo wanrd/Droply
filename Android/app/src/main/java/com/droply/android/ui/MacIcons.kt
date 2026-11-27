@@ -592,4 +592,53 @@ object MacIcons {
             }
         }
     }
+
+    // SF "photo" (Photo file icon in History)
+    val Photo: ImageVector by lazy {
+        icon("MacPhoto") {
+            strokePath(lineWidth = 1.8f) {
+                roundedRect(3.2f, 4.5f, 20.8f, 19.5f, 2.8f)
+                moveTo(4.2f, 16.5f)
+                lineTo(9.2f, 11.6f)
+                lineTo(13.6f, 15.8f)
+                lineTo(16.4f, 13.1f)
+                lineTo(20.0f, 16.7f)
+            }
+            fillPath {
+                circle(16.3f, 8.8f, 1.35f)
+            }
+        }
+    }
+
+    // SF "eye" (Quick photo preview button)
+    val Eye: ImageVector by lazy {
+        icon("MacEye") {
+            strokePath(lineWidth = 1.85f) {
+                moveTo(2.4f, 12f)
+                quadTo(12f, 4.5f, 21.6f, 12f)
+                quadTo(12f, 19.5f, 2.4f, 12f)
+                close()
+                circle(12f, 12f, 2.9f)
+            }
+        }
+    }
+
+    // SF "folder" (Open received file in file manager)
+    val FolderOpen: ImageVector by lazy {
+        icon("MacFolderOpen") {
+            strokePath(lineWidth = 1.85f) {
+                moveTo(3.2f, 7.2f)
+                quadTo(3.2f, 5.2f, 5.2f, 5.2f)
+                lineTo(9.3f, 5.2f)
+                lineTo(11.2f, 7.4f)
+                lineTo(18.8f, 7.4f)
+                quadTo(20.8f, 7.4f, 20.8f, 9.4f)
+                lineTo(20.8f, 17.6f)
+                quadTo(20.8f, 19.4f, 18.8f, 19.4f)
+                lineTo(5.2f, 19.4f)
+                quadTo(3.2f, 19.4f, 3.2f, 17.6f)
+                close()
+            }
+        }
+    }
 }

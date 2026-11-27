@@ -20,9 +20,12 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -52,6 +55,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -70,6 +74,7 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -80,6 +85,9 @@ import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.graphics.Path
@@ -89,6 +97,7 @@ import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -100,14 +109,17 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import com.droply.android.transfer.AndroidFileSaver
 import com.droply.android.transfer.ConnectionState
 import com.droply.android.transfer.FileTreeCollector
 import com.droply.android.transfer.IncomingBatchRequestUi
 import com.droply.android.transfer.SentFileRecord
 import com.droply.android.transfer.TransferProgressUi
 import com.droply.android.update.AppUpdateInfo
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.withContext
 import java.util.Locale
 
 enum class HistoryFilter(val label: String) {
@@ -160,6 +172,10 @@ fun DroplyScreen(
     isDarkTheme: Boolean,
     showSettings: Boolean,
     onShowSettingsChange: (Boolean) -> Unit,
+    previewPhotoRecord: SentFileRecord?,
+    onPreviewPhoto: (SentFileRecord) -> Unit,
+    onClosePhotoPreview: () -> Unit,
+    onOpenInFileManager: (SentFileRecord) -> Unit,
     onToggleTheme: () -> Unit,
     onThemeButtonPositioned: (Offset) -> Unit,
     deviceNameFlow: StateFlow<String>,
@@ -217,6 +233,7 @@ fun DroplyScreen(
     }
 
     val isOverlayOpen = showSettings ||
+        previewPhotoRecord != null ||
         showTextComposer ||
         (showUpdatePrompt && availableUpdate != null) ||
         incomingRequest != null ||
@@ -420,6 +437,8 @@ fun DroplyScreen(
                 ) { item ->
                     HistoryItemRow(
                         item = item,
+                        onPreviewPhoto = { onPreviewPhoto(item) },
+                        onOpenInFileManager = { onOpenInFileManager(item) },
                         onCopyText = { onCopyTextRecord(item) },
                         onDelete = { onRequestDeleteItem(item) },
                         modifier = Modifier.animateItem(
@@ -455,6 +474,13 @@ fun DroplyScreen(
             onUpdateDeviceName = onUpdateDeviceName,
             onUpdateRequireIncomingConfirmation = onUpdateRequireIncomingConfirmation,
             onDismiss = { onShowSettingsChange(false) }
+        )
+
+        PhotoPreviewOverlay(
+            record = previewPhotoRecord,
+            isDarkTheme = isDarkTheme,
+            onOpenInFileManager = onOpenInFileManager,
+            onDismiss = onClosePhotoPreview
         )
     }
 
@@ -1873,16 +1899,26 @@ private fun BottomTransferProgressBar(
 @Composable
 private fun HistoryItemRow(
     item: SentFileRecord,
+    onPreviewPhoto: () -> Unit,
+    onOpenInFileManager: () -> Unit,
     onCopyText: () -> Unit,
     onDelete: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val directionColor = if (item.isIncoming) Color(0xFF16A34A) else MaterialTheme.colorScheme.primary
+    val isPhoto = remember(item.relativePath, item.isText) {
+        AndroidFileSaver.isPhotoFile(item.relativePath, item.isText)
+    }
+    val canPreviewPhoto = isPhoto && item.ok && item.savedUri != null
+    val canOpenInFolder = item.isIncoming && item.ok
+
     Surface(
         shape = RoundedCornerShape(18.dp),
         color = MaterialTheme.colorScheme.surface,
         border = BorderStroke(0.8.dp, MaterialTheme.colorScheme.outline),
-        modifier = modifier.fillMaxWidth()
+        modifier = modifier
+            .fillMaxWidth()
+            .then(if (canPreviewPhoto) Modifier.clickable(onClick = onPreviewPhoto) else Modifier)
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
@@ -1899,6 +1935,7 @@ private fun HistoryItemRow(
                 Icon(
                     imageVector = when {
                         item.isText -> MacIcons.DocText
+                        isPhoto -> MacIcons.Photo
                         item.relativePath.contains('/') -> MacIcons.FolderFill
                         else -> MacIcons.DocFill
                     },
@@ -1941,28 +1978,34 @@ private fun HistoryItemRow(
                 )
             }
 
+            if (canPreviewPhoto) {
+                HistoryRowActionPill(
+                    icon = MacIcons.Eye,
+                    contentDescription = "Быстрый просмотр фото",
+                    tint = MaterialTheme.colorScheme.primary,
+                    containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.11f),
+                    onClick = onPreviewPhoto
+                )
+            }
+
+            if (canOpenInFolder) {
+                HistoryRowActionPill(
+                    icon = MacIcons.FolderOpen,
+                    contentDescription = "Показать в проводнике",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    containerColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f),
+                    onClick = onOpenInFileManager
+                )
+            }
+
             if (item.isText && item.ok) {
-                val copySource = remember { MutableInteractionSource() }
-                val copyScale = rememberPressScale(copySource, 0.90f)
-                Surface(
-                    onClick = onCopyText,
-                    interactionSource = copySource,
-                    shape = RoundedCornerShape(10.dp),
-                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.11f),
-                    modifier = Modifier.graphicsLayer {
-                        scaleX = copyScale
-                        scaleY = copyScale
-                    }
-                ) {
-                    Icon(
-                        imageVector = MacIcons.DocOnClipboard,
-                        contentDescription = "Копировать текст",
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier
-                            .padding(8.dp)
-                            .size(16.dp)
-                    )
-                }
+                HistoryRowActionPill(
+                    icon = MacIcons.DocOnClipboard,
+                    contentDescription = "Копировать текст",
+                    tint = MaterialTheme.colorScheme.primary,
+                    containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.11f),
+                    onClick = onCopyText
+                )
             }
 
             if (!item.ok) {
@@ -1992,6 +2035,300 @@ private fun HistoryItemRow(
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(17.dp)
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun HistoryRowActionPill(
+    icon: ImageVector,
+    contentDescription: String,
+    tint: Color,
+    containerColor: Color,
+    onClick: () -> Unit
+) {
+    val source = remember { MutableInteractionSource() }
+    val scale = rememberPressScale(source, 0.90f)
+    Surface(
+        onClick = onClick,
+        interactionSource = source,
+        shape = RoundedCornerShape(10.dp),
+        color = containerColor,
+        modifier = Modifier.graphicsLayer {
+            scaleX = scale
+            scaleY = scale
+        }
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = contentDescription,
+            tint = tint,
+            modifier = Modifier
+                .padding(8.dp)
+                .size(16.dp)
+        )
+    }
+}
+
+@Composable
+private fun PhotoPreviewOverlay(
+    record: SentFileRecord?,
+    isDarkTheme: Boolean,
+    onOpenInFileManager: (SentFileRecord) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var renderedRecord by remember { mutableStateOf<SentFileRecord?>(null) }
+    if (record != null) {
+        renderedRecord = record
+    }
+
+    AnimatedVisibility(
+        visible = record != null,
+        enter = fadeIn(tween(240, easing = FastOutSlowInEasing)) +
+            scaleIn(
+                initialScale = 0.95f,
+                animationSpec = tween(260, easing = FastOutSlowInEasing)
+            ),
+        exit = fadeOut(tween(200, easing = FastOutSlowInEasing)) +
+            scaleOut(
+                targetScale = 0.95f,
+                animationSpec = tween(200, easing = FastOutSlowInEasing)
+            )
+    ) {
+        val activeRecord = renderedRecord ?: return@AnimatedVisibility
+        val context = LocalContext.current
+        var imageBitmap by remember(activeRecord.id) { mutableStateOf<ImageBitmap?>(null) }
+        var isLoading by remember(activeRecord.id) { mutableStateOf(true) }
+        var zoomScale by remember(activeRecord.id) { mutableFloatStateOf(1f) }
+        var panOffset by remember(activeRecord.id) { mutableStateOf(Offset.Zero) }
+
+        LaunchedEffect(activeRecord.id, activeRecord.savedUri) {
+            isLoading = true
+            imageBitmap = null
+            zoomScale = 1f
+            panOffset = Offset.Zero
+            val uri = activeRecord.savedUri
+            val decoded = if (uri != null) {
+                withContext(Dispatchers.IO) {
+                    AndroidFileSaver.loadSampledImageBitmap(context, uri, maxDimension = 1600)
+                }
+            } else {
+                null
+            }
+            imageBitmap = decoded
+            isLoading = false
+        }
+
+        val backdropInteraction = remember { MutableInteractionSource() }
+        val cardInteraction = remember { MutableInteractionSource() }
+        val fileName = remember(activeRecord.relativePath) {
+            activeRecord.relativePath.substringAfterLast('/')
+        }
+
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    if (isDarkTheme) Color.Black.copy(alpha = 0.68f) else Color.Black.copy(alpha = 0.44f)
+                )
+                .clickable(
+                    interactionSource = backdropInteraction,
+                    indication = null,
+                    onClick = onDismiss
+                )
+                .statusBarsPadding()
+                .navigationBarsPadding()
+                .padding(horizontal = 14.dp, vertical = 18.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Surface(
+                shape = RoundedCornerShape(24.dp),
+                color = MaterialTheme.colorScheme.surface,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                shadowElevation = 24.dp,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 340.dp, max = 660.dp)
+                    .clickable(
+                        interactionSource = cardInteraction,
+                        indication = null,
+                        onClick = {}
+                    )
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = MacIcons.Photo,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(1.dp)
+                        ) {
+                            Text(
+                                text = fileName,
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = "${if (activeRecord.isIncoming) "Получено" else "Отправлено"} · ${FileTreeCollector.formatBytes(activeRecord.sizeBytes)}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+
+                        val closeSource = remember { MutableInteractionSource() }
+                        val closeScale = rememberPressScale(closeSource, 0.88f)
+                        Surface(
+                            onClick = onDismiss,
+                            interactionSource = closeSource,
+                            shape = CircleShape,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f),
+                            modifier = Modifier
+                                .size(34.dp)
+                                .graphicsLayer {
+                                    scaleX = closeScale
+                                    scaleY = closeScale
+                                }
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = MacIcons.Xmark,
+                                    contentDescription = "Закрыть просмотр",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(15.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(Color(0xFF0A0E16))
+                            .pointerInput(activeRecord.id) {
+                                detectTapGestures(
+                                    onDoubleTap = {
+                                        if (zoomScale > 1.05f) {
+                                            zoomScale = 1f
+                                            panOffset = Offset.Zero
+                                        } else {
+                                            zoomScale = 2.4f
+                                        }
+                                    }
+                                )
+                            }
+                            .pointerInput(activeRecord.id) {
+                                detectTransformGestures { _, pan, zoom, _ ->
+                                    val updatedScale = (zoomScale * zoom).coerceIn(1f, 5f)
+                                    zoomScale = updatedScale
+                                    if (updatedScale > 1.02f) {
+                                        val maxShiftX = size.width * (updatedScale - 1f) * 0.5f
+                                        val maxShiftY = size.height * (updatedScale - 1f) * 0.5f
+                                        panOffset = Offset(
+                                            x = (panOffset.x + pan.x).coerceIn(-maxShiftX, maxShiftX),
+                                            y = (panOffset.y + pan.y).coerceIn(-maxShiftY, maxShiftY)
+                                        )
+                                    } else {
+                                        panOffset = Offset.Zero
+                                    }
+                                }
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        val loaded = imageBitmap
+                        when {
+                            isLoading -> {
+                                CircularProgressIndicator(
+                                    color = MaterialTheme.colorScheme.primary,
+                                    strokeWidth = 2.5.dp,
+                                    modifier = Modifier.size(30.dp)
+                                )
+                            }
+                            loaded != null -> {
+                                Image(
+                                    bitmap = loaded,
+                                    contentDescription = fileName,
+                                    contentScale = ContentScale.Fit,
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .graphicsLayer {
+                                            scaleX = zoomScale
+                                            scaleY = zoomScale
+                                            translationX = panOffset.x
+                                            translationY = panOffset.y
+                                        }
+                                )
+                            }
+                            else -> {
+                                Text(
+                                    text = "Не удалось загрузить изображение",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color(0xFFA0AEC0)
+                                )
+                            }
+                        }
+                    }
+
+                    if (activeRecord.isIncoming && activeRecord.ok) {
+                        val openSource = remember { MutableInteractionSource() }
+                        val openScale = rememberPressScale(openSource, 0.97f)
+                        Button(
+                            onClick = { onOpenInFileManager(activeRecord) },
+                            interactionSource = openSource,
+                            shape = RoundedCornerShape(14.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.primary,
+                                contentColor = Color.White
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(46.dp)
+                                .graphicsLayer {
+                                    scaleX = openScale
+                                    scaleY = openScale
+                                }
+                        ) {
+                            Icon(
+                                imageVector = MacIcons.FolderOpen,
+                                contentDescription = null,
+                                modifier = Modifier.size(17.dp)
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                text = "Открыть в проводнике",
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+                }
             }
         }
     }

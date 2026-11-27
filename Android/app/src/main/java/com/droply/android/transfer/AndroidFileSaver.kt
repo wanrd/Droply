@@ -1,15 +1,26 @@
 package com.droply.android.transfer
 
+import android.app.DownloadManager
 import android.content.ContentValues
 import android.content.Context
+import android.content.Intent
+import android.graphics.BitmapFactory
+import android.graphics.ImageDecoder
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
+import android.provider.DocumentsContract
 import android.provider.MediaStore
+import android.webkit.MimeTypeMap
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
 import java.io.OutputStream
+import java.util.Locale
+import kotlin.math.max
+import kotlin.math.roundToInt
 
 interface IncomingFileWriter {
     val outputStream: OutputStream
@@ -167,6 +178,117 @@ object AndroidFileSaver {
                 String(data, Charsets.UTF_8)
             }
         }.getOrNull()
+    }
+
+    private val photoExtensions = setOf("jpg", "jpeg", "png", "webp", "heic", "heif", "gif", "bmp")
+
+    fun isPhotoFile(relativePath: String, isText: Boolean): Boolean {
+        if (isText) return false
+        val ext = relativePath.substringAfterLast('.', "").lowercase(Locale.US)
+        return ext in photoExtensions
+    }
+
+    fun loadSampledImageBitmap(
+        context: Context,
+        uri: Uri,
+        maxDimension: Int = 1600
+    ): ImageBitmap? {
+        return runCatching {
+            val resolver = context.contentResolver
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                val source = ImageDecoder.createSource(resolver, uri)
+                ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
+                    decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+                    val w = info.size.width
+                    val h = info.size.height
+                    val longest = max(w, h)
+                    if (longest > maxDimension && w > 0 && h > 0) {
+                        val ratio = maxDimension.toFloat() / longest.toFloat()
+                        decoder.setTargetSize(
+                            (w * ratio).roundToInt().coerceAtLeast(1),
+                            (h * ratio).roundToInt().coerceAtLeast(1)
+                        )
+                    }
+                }.asImageBitmap()
+            } else {
+                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+                val longest = max(bounds.outWidth, bounds.outHeight)
+                var sample = 1
+                while (longest / sample > maxDimension * 2) {
+                    sample *= 2
+                }
+                val decodeOpts = BitmapFactory.Options().apply { inSampleSize = sample }
+                resolver.openInputStream(uri)?.use { stream ->
+                    BitmapFactory.decodeStream(stream, null, decodeOpts)?.asImageBitmap()
+                }
+            }
+        }.getOrNull()
+    }
+
+    fun openInFileManager(context: Context, record: SentFileRecord): Boolean {
+        val parts = record.relativePath.split('/').filter { it.isNotBlank() }
+        val subDirs = if (parts.size > 1) parts.dropLast(1) else emptyList()
+        val folderDocId = if (subDirs.isEmpty()) {
+            "primary:${Environment.DIRECTORY_DOWNLOADS}/Droply"
+        } else {
+            "primary:${Environment.DIRECTORY_DOWNLOADS}/Droply/${subDirs.joinToString("/")}"
+        }
+
+        val candidateIntents = buildList {
+            // 1. Direct DocumentsUI / Files folder view inside Downloads/Droply
+            val dirUri = DocumentsContract.buildDocumentUri(
+                "com.android.externalstorage.documents",
+                folderDocId
+            )
+            add(
+                Intent(Intent.ACTION_VIEW).apply {
+                    setDataAndType(dirUri, DocumentsContract.Document.MIME_TYPE_DIR)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+            )
+            // 2. Fallback to root Droply downloads folder
+            if (subDirs.isNotEmpty()) {
+                val rootDroplyUri = DocumentsContract.buildDocumentUri(
+                    "com.android.externalstorage.documents",
+                    "primary:${Environment.DIRECTORY_DOWNLOADS}/Droply"
+                )
+                add(
+                    Intent(Intent.ACTION_VIEW).apply {
+                        setDataAndType(rootDroplyUri, DocumentsContract.Document.MIME_TYPE_DIR)
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                )
+            }
+            // 3. System Downloads manager / explorer
+            add(
+                Intent(DownloadManager.ACTION_VIEW_DOWNLOADS).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+            )
+            // 4. Direct file URI view
+            record.savedUri?.let { fileUri ->
+                val ext = record.relativePath.substringAfterLast('.', "").lowercase(Locale.US)
+                val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext)
+                    ?: context.contentResolver.getType(fileUri)
+                    ?: "*/*"
+                add(
+                    Intent(Intent.ACTION_VIEW).apply {
+                        setDataAndType(fileUri, mime)
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                )
+            }
+        }
+
+        for (intent in candidateIntents) {
+            val started = runCatching {
+                context.startActivity(intent)
+                true
+            }.getOrDefault(false)
+            if (started) return true
+        }
+        return false
     }
 
     private fun resolveUniqueFile(dir: File, name: String): File {
