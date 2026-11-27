@@ -13,6 +13,8 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.Uri
+import android.net.nsd.NsdManager
+import android.net.nsd.NsdServiceInfo
 import android.os.Build
 import android.os.Environment
 import android.os.StatFs
@@ -47,9 +49,11 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayInputStream
@@ -59,10 +63,13 @@ import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.ConnectException
+import java.net.Inet4Address
+import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.NoRouteToHostException
 import java.net.Socket
 import java.net.SocketTimeoutException
+import kotlin.coroutines.resume
 import java.security.MessageDigest
 import java.security.interfaces.ECPublicKey
 import java.util.Base64
@@ -210,6 +217,9 @@ class DroplyClient {
     private var socket: Socket? = null
 
     @Volatile
+    private var pendingConnectingSocket: Socket? = null
+
+    @Volatile
     private var outputStream: OutputStream? = null
 
     @Volatile
@@ -290,6 +300,7 @@ class DroplyClient {
 
     fun startConnect(context: Context, payload: QRPairingPayload) {
         bindApplicationContext(context)
+        runCatching { pendingConnectingSocket?.close() }
         scope.launch {
             connect(context.applicationContext, payload)
         }
@@ -476,23 +487,260 @@ class DroplyClient {
         }
     }
 
+    private data class WifiNetworkInfo(
+        val networks: List<Network>,
+        val localIpv4Prefixes: List<Pair<Int, Int>>,
+        val primaryIpv4: String?
+    )
+
+    private data class EndpointCandidate(
+        val host: String,
+        val port: Int
+    )
+
     @Suppress("DEPRECATION")
-    private fun findWifiNetwork(context: Context): Network? {
-        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return null
+    private fun inspectWifiNetworks(context: Context): WifiNetworkInfo {
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            ?: return WifiNetworkInfo(emptyList(), emptyList(), null)
         val active = cm.activeNetwork
-        if (active != null) {
-            val caps = cm.getNetworkCapabilities(active)
-            if (caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true &&
-                !caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+        val candidates = mutableListOf<Network>()
+        val seen = HashSet<String>()
+
+        fun maybeAdd(network: Network?) {
+            if (network == null) return
+            val key = network.toString()
+            if (!seen.add(key)) return
+            val caps = cm.getNetworkCapabilities(network) ?: return
+            if (!caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) return
+            if (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
+                !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
             ) {
-                return active
+                return
+            }
+            candidates.add(network)
+        }
+
+        maybeAdd(active)
+        val rest = cm.allNetworks.sortedByDescending { net ->
+            val caps = cm.getNetworkCapabilities(net)
+            if (caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true) 1 else 0
+        }
+        rest.forEach(::maybeAdd)
+
+        val prefixes = mutableListOf<Pair<Int, Int>>()
+        var primaryIpv4: String? = null
+        for (net in candidates) {
+            val props = runCatching { cm.getLinkProperties(net) }.getOrNull() ?: continue
+            for (linkAddr in props.linkAddresses) {
+                val inet4 = linkAddr.address as? Inet4Address ?: continue
+                if (inet4.isLoopbackAddress) continue
+                val ipStr = inet4.hostAddress ?: continue
+                if (primaryIpv4 == null) primaryIpv4 = ipStr
+                val prefixLen = linkAddr.prefixLength.coerceIn(1, 32)
+                prefixes.add(ipv4ToInt(inet4) to prefixLen)
             }
         }
-        return cm.allNetworks.firstOrNull { network ->
-            val caps = cm.getNetworkCapabilities(network)
-            caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true &&
-                !caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+        return WifiNetworkInfo(
+            networks = candidates,
+            localIpv4Prefixes = prefixes,
+            primaryIpv4 = primaryIpv4
+        )
+    }
+
+    private fun ipv4ToInt(addr: Inet4Address): Int {
+        val b = addr.address
+        return ((b[0].toInt() and 0xFF) shl 24) or
+            ((b[1].toInt() and 0xFF) shl 16) or
+            ((b[2].toInt() and 0xFF) shl 8) or
+            (b[3].toInt() and 0xFF)
+    }
+
+    private fun parseIpv4ToInt(ip: String): Int? {
+        val parts = ip.split('.')
+        if (parts.size != 4) return null
+        var acc = 0
+        for (part in parts) {
+            val v = part.toIntOrNull() ?: return null
+            if (v !in 0..255) return null
+            acc = (acc shl 8) or v
         }
+        return acc
+    }
+
+    private fun isSameSubnet(hostIp: String, prefixes: List<Pair<Int, Int>>): Boolean {
+        if (prefixes.isEmpty()) return true
+        val target = parseIpv4ToInt(hostIp) ?: return false
+        return prefixes.any { (local, prefixLen) ->
+            val mask = if (prefixLen == 0) 0 else (-1 shl (32 - prefixLen))
+            (target and mask) == (local and mask)
+        }
+    }
+
+    private fun prioritizeHosts(hosts: List<String>, prefixes: List<Pair<Int, Int>>): List<String> {
+        if (hosts.size <= 1 || prefixes.isEmpty()) return hosts
+        val (sameSubnet, other) = hosts.partition { isSameSubnet(it, prefixes) }
+        return sameSubnet + other
+    }
+
+    @Suppress("DEPRECATION")
+    private suspend fun discoverBonjourEndpoints(
+        context: Context,
+        preferredName: String,
+        alreadyTried: Set<EndpointCandidate>,
+        timeoutMs: Long = 2200L
+    ): List<EndpointCandidate> = withTimeoutOrNull(timeoutMs) {
+        suspendCancellableCoroutine { cont ->
+            val nsd = context.getSystemService(Context.NSD_SERVICE) as? NsdManager
+            if (nsd == null) {
+                cont.resume(emptyList())
+                return@suspendCancellableCoroutine
+            }
+            val found = mutableListOf<EndpointCandidate>()
+            val lock = Any()
+            var finished = false
+            var discoveryListener: NsdManager.DiscoveryListener? = null
+
+            fun finishOnce() {
+                synchronized(lock) {
+                    if (finished) return
+                    finished = true
+                }
+                discoveryListener?.let { runCatching { nsd.stopServiceDiscovery(it) } }
+                if (cont.isActive) {
+                    cont.resume(synchronized(lock) { found.toList() })
+                }
+            }
+
+            val listener = object : NsdManager.DiscoveryListener {
+                override fun onDiscoveryStarted(regType: String) = Unit
+
+                override fun onServiceFound(serviceInfo: NsdServiceInfo) {
+                    if (!serviceInfo.serviceType.contains("_droply._tcp")) return
+                    nsd.resolveService(serviceInfo, object : NsdManager.ResolveListener {
+                        override fun onResolveFailed(info: NsdServiceInfo, errorCode: Int) = Unit
+
+                        override fun onServiceResolved(resolved: NsdServiceInfo) {
+                            val inet4 = (resolved.host as? Inet4Address)
+                                ?: run {
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                                        resolved.hostAddresses.firstOrNull { it is Inet4Address } as? Inet4Address
+                                    } else {
+                                        null
+                                    }
+                                }
+                            val host = inet4?.hostAddress ?: return
+                            val port = resolved.port
+                            if (port !in 1..65535) return
+                            val candidate = EndpointCandidate(host = host, port = port)
+                            val nameMatches = resolved.serviceName.contains(preferredName, ignoreCase = true)
+                            synchronized(lock) {
+                                if (!alreadyTried.contains(candidate) && !found.contains(candidate)) {
+                                    if (nameMatches) found.add(0, candidate) else found.add(candidate)
+                                }
+                            }
+                            if (nameMatches) {
+                                finishOnce()
+                            }
+                        }
+                    })
+                }
+
+                override fun onServiceLost(serviceInfo: NsdServiceInfo) = Unit
+
+                override fun onDiscoveryStopped(serviceType: String) = Unit
+
+                override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {
+                    finishOnce()
+                }
+
+                override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) = Unit
+            }
+
+            discoveryListener = listener
+            cont.invokeOnCancellation {
+                runCatching { nsd.stopServiceDiscovery(listener) }
+            }
+            val started = runCatching {
+                nsd.discoverServices("_droply._tcp.", NsdManager.PROTOCOL_DNS_SD, listener)
+            }.isSuccess
+            if (!started) {
+                finishOnce()
+            }
+        }
+    } ?: emptyList()
+
+    private fun tryConnectCandidates(
+        candidates: List<EndpointCandidate>,
+        wifiNetworks: List<Network>,
+        connectTimeoutMs: Int,
+        triedOut: MutableSet<EndpointCandidate>
+    ): Pair<Pair<Socket, EndpointCandidate>?, Exception?> {
+        var preferredWifiError: Exception? = null
+        var fallbackError: Exception? = null
+
+        for (candidate in candidates) {
+            triedOut.add(candidate)
+            val factories = mutableListOf<Pair<Boolean, () -> Socket>>()
+            for (net in wifiNetworks) {
+                factories.add(true to { net.socketFactory.createSocket() })
+                factories.add(true to { Socket().also { sock -> net.bindSocket(sock) } })
+            }
+            if (wifiNetworks.isEmpty()) {
+                factories.add(false to { Socket() })
+            }
+
+            for ((isWifiBound, factory) in factories) {
+                var sock: Socket? = null
+                val attempt = runCatching {
+                    sock = factory()
+                    pendingConnectingSocket = sock
+                    sock!!.tcpNoDelay = true
+                    sock!!.keepAlive = true
+                    sock!!.sendBufferSize = DroplyProtocol.CHUNK_SIZE * 2
+                    sock!!.connect(InetSocketAddress(candidate.host, candidate.port), connectTimeoutMs)
+                    sock!!
+                }
+                pendingConnectingSocket = null
+                if (attempt.isSuccess) {
+                    return (attempt.getOrThrow() to candidate) to null
+                } else {
+                    runCatching { sock?.close() }
+                    val err = attempt.exceptionOrNull() as? Exception
+                    if (isWifiBound) {
+                        if (preferredWifiError == null || err is ConnectException || err is SocketTimeoutException) {
+                            preferredWifiError = err
+                        }
+                    } else if (fallbackError == null) {
+                        fallbackError = err
+                    }
+                }
+            }
+
+            // Last-resort unbound attempt only if all Wi-Fi-bound sockets failed and might be blocked by vendor policy
+            if (wifiNetworks.isNotEmpty()) {
+                var sock: Socket? = null
+                val unboundAttempt = runCatching {
+                    sock = Socket()
+                    pendingConnectingSocket = sock
+                    sock!!.tcpNoDelay = true
+                    sock!!.keepAlive = true
+                    sock!!.sendBufferSize = DroplyProtocol.CHUNK_SIZE * 2
+                    sock!!.connect(InetSocketAddress(candidate.host, candidate.port), connectTimeoutMs)
+                    sock!!
+                }
+                pendingConnectingSocket = null
+                if (unboundAttempt.isSuccess) {
+                    return (unboundAttempt.getOrThrow() to candidate) to null
+                } else {
+                    runCatching { sock?.close() }
+                    if (fallbackError == null) {
+                        fallbackError = unboundAttempt.exceptionOrNull() as? Exception
+                    }
+                }
+            }
+        }
+        return null to (preferredWifiError ?: fallbackError)
     }
 
     suspend fun connect(context: Context, payload: QRPairingPayload) = withContext(Dispatchers.IO) {
@@ -503,43 +751,46 @@ class DroplyClient {
             _statusMessage.value = null
             _connectionState.value = ConnectionState.Connecting
 
+            var wifiInfo = WifiNetworkInfo(emptyList(), emptyList(), null)
             try {
-                val wifiNetwork = findWifiNetwork(context)
-                var connectedSocket: Socket? = null
-                var connectedHost = payload.host
-                var lastError: Exception? = null
+                wifiInfo = inspectWifiNetworks(context)
+                val orderedHosts = prioritizeHosts(payload.hosts, wifiInfo.localIpv4Prefixes)
+                val initialCandidates = orderedHosts.map { EndpointCandidate(host = it, port = payload.port) }
+                val tried = LinkedHashSet<EndpointCandidate>()
+                val perAttemptTimeout = if (initialCandidates.size > 1) 3000 else 4500
 
-                for (candidateHost in payload.hosts) {
-                    val factories: List<() -> Socket> = if (wifiNetwork != null) {
-                        listOf(
-                            { wifiNetwork.socketFactory.createSocket() },
-                            { Socket() }
+                var (connectedPair, lastError) = tryConnectCandidates(
+                    candidates = initialCandidates,
+                    wifiNetworks = wifiInfo.networks,
+                    connectTimeoutMs = perAttemptTimeout,
+                    triedOut = tried
+                )
+
+                if (connectedPair == null) {
+                    val bonjourCandidates = discoverBonjourEndpoints(
+                        context = context,
+                        preferredName = payload.name,
+                        alreadyTried = tried
+                    )
+                    if (bonjourCandidates.isNotEmpty()) {
+                        val (bonjourPair, bonjourErr) = tryConnectCandidates(
+                            candidates = bonjourCandidates,
+                            wifiNetworks = wifiInfo.networks,
+                            connectTimeoutMs = 3500,
+                            triedOut = tried
                         )
-                    } else {
-                        listOf { Socket() }
-                    }
-
-                    for (factory in factories) {
-                        val attempt = runCatching {
-                            val sock = factory()
-                            sock.tcpNoDelay = true
-                            sock.keepAlive = true
-                            sock.sendBufferSize = DroplyProtocol.CHUNK_SIZE * 2
-                            sock.connect(InetSocketAddress(candidateHost, payload.port), 5500)
-                            sock
-                        }
-                        if (attempt.isSuccess) {
-                            connectedSocket = attempt.getOrNull()
-                            connectedHost = candidateHost
-                            break
-                        } else {
-                            lastError = attempt.exceptionOrNull() as? Exception
+                        if (bonjourPair != null) {
+                            connectedPair = bonjourPair
+                        } else if (bonjourErr != null && lastError == null) {
+                            lastError = bonjourErr
                         }
                     }
-                    if (connectedSocket != null) break
                 }
 
-                val newSocket = connectedSocket ?: throw (lastError ?: IOException("Не удалось подключиться"))
+                val (newSocket, resolvedEndpoint) = connectedPair
+                    ?: throw (lastError ?: IOException("Не удалось подключиться"))
+                val connectedHost = resolvedEndpoint.host
+                val connectedPort = resolvedEndpoint.port
                 newSocket.soTimeout = 10000
 
                 val out = newSocket.getOutputStream()
@@ -632,7 +883,7 @@ class DroplyClient {
                 _connectionState.value = ConnectionState.Connected(
                     macName = authResult.deviceName,
                     host = connectedHost,
-                    port = payload.port
+                    port = connectedPort
                 )
                 syncBackgroundService()
                 _statusMessage.value = "Подключено к ${authResult.deviceName} (AES-256-GCM)"
@@ -643,7 +894,7 @@ class DroplyClient {
                 startHeartbeat(newSocket)
             } catch (e: Exception) {
                 disconnectInternal(notifyPeer = false)
-                _errorMessage.value = formatConnectError(e, payload.host)
+                _errorMessage.value = formatConnectError(e, payload.host, payload.port, wifiInfo)
             }
         }
     }
@@ -702,18 +953,43 @@ class DroplyClient {
         }
     }
 
-    private fun formatConnectError(e: Exception, host: String): String {
-        val isRouteOrTimeout = e is NoRouteToHostException ||
-            e is ConnectException ||
-            e is SocketTimeoutException ||
-            e.message?.contains("EHOSTUNREACH", ignoreCase = true) == true
-        return if (isRouteOrTimeout) {
-            "Нет маршрута к MacBook ($host). Проверьте:\n" +
-                "1. Отключите VPN на MacBook и телефоне\n" +
-                "2. Оба устройства в одной Wi-Fi сети (не гостевой и без «Изоляции клиентов» в роутере)\n" +
-                "3. На MacBook разрешите Droply доступ к локальной сети"
-        } else {
-            e.message ?: "Не удалось подключиться по Wi-Fi"
+    private fun formatConnectError(
+        e: Exception,
+        host: String,
+        port: Int,
+        wifiInfo: WifiNetworkInfo
+    ): String {
+        val msg = e.message.orEmpty()
+        val isNoRoute = e is NoRouteToHostException ||
+            msg.contains("EHOSTUNREACH", ignoreCase = true) ||
+            msg.contains("ENETUNREACH", ignoreCase = true)
+        val isRefused = e is ConnectException ||
+            msg.contains("ECONNREFUSED", ignoreCase = true)
+        val isTimeout = e is SocketTimeoutException
+
+        if ((isNoRoute || isTimeout) &&
+            wifiInfo.primaryIpv4 != null &&
+            wifiInfo.localIpv4Prefixes.isNotEmpty() &&
+            !isSameSubnet(host, wifiInfo.localIpv4Prefixes)
+        ) {
+            return "Разные подсети Wi-Fi: телефон (${wifiInfo.primaryIpv4}) не в одной сети с MacBook ($host). Подключите оба устройства к одному роутеру (не гостевой сети)."
+        }
+
+        return when {
+            isRefused ->
+                "MacBook ($host) найден в сети, но порт $port закрыт. Откройте Droply на MacBook и нажмите «Обновить QR-код»."
+            isTimeout ->
+                "Таймаут подключения к MacBook ($host). Проверьте:\n" +
+                    "1. На MacBook разрешите Droply доступ к локальной сети (Системные настройки → Конфиденциальность → Локальная сеть)\n" +
+                    "2. MacBook не в спящем режиме и входящие не блокирует файрвол\n" +
+                    "3. В роутере отключена «Изоляция клиентов» (AP Isolation)"
+            isNoRoute ->
+                "Нет маршрута к MacBook ($host). Проверьте:\n" +
+                    "1. Отключите VPN на MacBook и телефоне (включая фоновые VPN-туннели)\n" +
+                    "2. Оба устройства в одной Wi-Fi сети (не гостевой и без «Изоляции клиентов» в роутере)\n" +
+                    "3. Если включено «Ускорение двух каналов / Wi-Fi+», временно отключите мобильную сеть при подключении"
+            else ->
+                msg.ifBlank { "Не удалось подключиться по Wi-Fi" }
         }
     }
 
@@ -804,16 +1080,33 @@ class DroplyClient {
 
                     FrameType.BATCH_START -> {
                         val batch = FrameCodec.parseBatchStart(frame.payload)
-                        if (batch.totalFiles !in 1..MAX_BATCH_FILES || batch.totalBytes !in 0L..MAX_BATCH_BYTES) {
+                        if (batch.batchId.isBlank() ||
+                            batch.batchId.length > 128 ||
+                            batch.totalFiles !in 1..MAX_BATCH_FILES ||
+                            batch.totalBytes !in 0L..MAX_BATCH_BYTES
+                        ) {
                             sendEncryptedJson(
                                 FrameType.BATCH_ACCEPT,
                                 JSONObject().apply {
-                                    put("batchId", batch.batchId)
+                                    put("batchId", batch.batchId.take(128))
                                     put("accepted", false)
                                     put("reason", "Некорректные параметры передачи")
                                 }
                             )
                             _errorMessage.value = "Отклонена передача с некорректным размером или количеством файлов"
+                            continue
+                        }
+
+                        val activeIncoming = incomingSession
+                        if (activeIncoming != null && !activeIncoming.cancelled && activeIncoming.approved == true) {
+                            sendEncryptedJson(
+                                FrameType.BATCH_ACCEPT,
+                                JSONObject().apply {
+                                    put("batchId", batch.batchId)
+                                    put("accepted", false)
+                                    put("reason", "На смартфоне уже идёт приём файлов")
+                                }
+                            )
                             continue
                         }
 
@@ -907,7 +1200,7 @@ class DroplyClient {
                         session.currentHasher = MessageDigest.getInstance("SHA-256")
                         session.currentFileBytes = 0L
                         session.textBuffer = if (fileStart.isText && fileStart.size <= 512 * 1024) {
-                            ArrayList(fileStart.size.toInt().coerceAtLeast(0))
+                            ArrayList(fileStart.size.toInt().coerceIn(0, 64 * 1024))
                         } else {
                             null
                         }
@@ -956,10 +1249,12 @@ class DroplyClient {
                         if (session.cancelled || session.approved != true) continue
                         val fileStart = session.currentFile ?: continue
                         val writer = session.currentWriter ?: continue
-                        val expectedSha = JSONObject(String(frame.payload, Charsets.UTF_8))
-                            .optString("sha256", "")
-                            .trim()
-                            .lowercase()
+                        val expectedSha = runCatching {
+                            JSONObject(String(frame.payload, Charsets.UTF_8))
+                                .optString("sha256", "")
+                                .trim()
+                                .lowercase()
+                        }.getOrDefault("")
                         val computedSha = session.currentHasher?.digest()?.joinToString("") { "%02x".format(it) }.orEmpty()
 
                         if (session.currentFileBytes != fileStart.size ||
@@ -1178,14 +1473,17 @@ class DroplyClient {
         val out = outputStream
         val cipher = sessionCipher
         val sock = socket
+        val pendingSock = pendingConnectingSocket
         outputStream = null
         sessionCipher = null
         socket = null
+        pendingConnectingSocket = null
         if (notifyPeer && out != null && cipher != null) {
             runCatching {
                 FrameCodec.writeEncryptedJsonFrame(out, cipher, FrameType.DISCONNECT, JSONObject())
             }
         }
+        runCatching { pendingSock?.close() }
         runCatching { sock?.close() }
         _isTransferring.value = false
         _progress.value = null

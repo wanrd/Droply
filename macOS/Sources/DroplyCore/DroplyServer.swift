@@ -146,7 +146,7 @@ private final class SocketStream: @unchecked Sendable {
         setsockopt(fd, IPPROTO_TCP, TCP_KEEPALIVE, &keepIdle, socklen_t(MemoryLayout<Int32>.size))
         setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, &keepInterval, socklen_t(MemoryLayout<Int32>.size))
         setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &keepCount, socklen_t(MemoryLayout<Int32>.size))
-        setReceiveTimeout(seconds: 5)
+        setReceiveTimeout(seconds: 12)
     }
 
     func setReceiveTimeout(seconds: Int) {
@@ -356,6 +356,7 @@ private final class OutgoingWaiter<T: Sendable>: @unchecked Sendable {
 public final class DroplyServer: @unchecked Sendable {
     private let lock = NSLock()
     private var listenFD: Int32 = -1
+    private var bonjourService: NetService?
     private var activeClient: SocketStream?
     private var activeSessionID: UUID?
     private var activePeerName: String = "Android"
@@ -529,10 +530,45 @@ public final class DroplyServer: @unchecked Sendable {
         lock.unlock()
 
         let host = NetworkUtils.primaryWiFiIPv4()
+        startBonjourService(port: actualPort, name: currentDeviceName)
         onEvent(.started(host: host, port: actualPort, token: newToken))
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             self?.acceptLoop(listenFD: fd)
+        }
+    }
+
+    private func startBonjourService(port: UInt16, name: String) {
+        let cleanName = SecureChannel.sanitizeDisplayText(name).isEmpty ? "Droply" : SecureChannel.sanitizeDisplayText(name)
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.lock.lock()
+            let existing = self.bonjourService
+            let running = self.isRunningFlag && self.listeningPort == port
+            if !running {
+                self.bonjourService = nil
+                self.lock.unlock()
+                existing?.stop()
+                return
+            }
+            let service = NetService(domain: "local.", type: "_droply._tcp.", name: cleanName, port: Int32(port))
+            service.includesPeerToPeer = true
+            self.bonjourService = service
+            self.lock.unlock()
+            existing?.stop()
+            service.publish()
+        }
+    }
+
+    private func stopBonjourService() {
+        lock.lock()
+        let service = bonjourService
+        bonjourService = nil
+        lock.unlock()
+        if let service {
+            DispatchQueue.main.async {
+                service.stop()
+            }
         }
     }
 
@@ -848,6 +884,7 @@ public final class DroplyServer: @unchecked Sendable {
         let newToken = NetworkUtils.generateSessionToken()
         lock.lock()
         token = newToken
+        authAttemptsByIP.removeAll()
         let client = activeClient
         let hadClient = activeSessionID != nil
         activeClient = nil
@@ -971,6 +1008,7 @@ public final class DroplyServer: @unchecked Sendable {
         resultWaiters.forEach { $0.resolve(FileResultPayload(fileIndex: -1, ok: false, error: "Сервер остановлен")) }
 
         client?.closeSocket()
+        stopBonjourService()
         if fd >= 0 {
             Darwin.shutdown(fd, SHUT_RDWR)
             Darwin.close(fd)
@@ -1060,7 +1098,22 @@ public final class DroplyServer: @unchecked Sendable {
             }
 
             if clientFD < 0 {
-                if errno == EINTR { continue }
+                let err = errno
+                if err == EINTR || err == EAGAIN || err == EWOULDBLOCK ||
+                    err == ECONNABORTED || err == ECONNRESET || err == EPROTO {
+                    continue
+                }
+                if err == EMFILE || err == ENFILE || err == ENOBUFS || err == ENOMEM {
+                    Thread.sleep(forTimeInterval: 0.05)
+                    continue
+                }
+                lock.lock()
+                let stillSameSocket = isRunningFlag && self.listenFD == listenFD
+                lock.unlock()
+                if stillSameSocket && err != EBADF && err != EINVAL && err != ENOTSOCK {
+                    Thread.sleep(forTimeInterval: 0.05)
+                    continue
+                }
                 break
             }
 
@@ -1383,12 +1436,25 @@ public final class DroplyServer: @unchecked Sendable {
 
             case .batchStart:
                 let batch = try FrameCodec.decodeJSON(BatchStartPayload.self, from: frame.payload)
-                guard batch.totalFiles > 0,
+                guard !batch.batchId.isEmpty,
+                      batch.batchId.count <= 128,
+                      batch.totalFiles > 0,
                       batch.totalFiles <= Self.maxBatchFiles,
                       batch.totalBytes <= Self.maxBatchBytes else {
                     try stream.sendJSON(
                         type: .batchAccept,
-                        value: BatchAcceptPayload(batchId: batch.batchId, accepted: false, reason: "Некорректные параметры передачи")
+                        value: BatchAcceptPayload(batchId: String(batch.batchId.prefix(128)), accepted: false, reason: "Некорректные параметры передачи")
+                    )
+                    break
+                }
+
+                lock.lock()
+                let alreadyReceiving = incomingSession.map { !$0.cancelled && $0.approved == true } ?? false
+                lock.unlock()
+                if alreadyReceiving {
+                    try stream.sendJSON(
+                        type: .batchAccept,
+                        value: BatchAcceptPayload(batchId: batch.batchId, accepted: false, reason: "На MacBook уже идёт приём файлов")
                     )
                     break
                 }
@@ -1571,9 +1637,10 @@ public final class DroplyServer: @unchecked Sendable {
                         throw PathSanitizerError.unsafePath(fileStart.relativePath)
                     }
                     if session.overwrite && FileManager.default.fileExists(atPath: finalURL.path) {
-                        try FileManager.default.removeItem(at: finalURL)
+                        _ = try FileManager.default.replaceItemAt(finalURL, withItemAt: tempURL)
+                    } else {
+                        try FileManager.default.moveItem(at: tempURL, to: finalURL)
                     }
-                    try FileManager.default.moveItem(at: tempURL, to: finalURL)
 
                     session.completedFilesCount += 1
                     emitIncomingProgress(session: session, stream: stream, forceAck: true)

@@ -24,7 +24,11 @@ package_app() {
     local local_net_xml=""
     if [ "$include_local_network_desc" = "yes" ]; then
         local_net_xml="    <key>NSLocalNetworkUsageDescription</key>
-    <string>Droply использует локальную сеть Wi-Fi для прямой передачи файлов с Android без серверов.</string>"
+    <string>Droply использует локальную сеть Wi-Fi для прямой передачи файлов с Android без серверов.</string>
+    <key>NSBonjourServices</key>
+    <array>
+        <string>_droply._tcp</string>
+    </array>"
     fi
 
     cat > "$app_dir/Contents/Info.plist" << EOF

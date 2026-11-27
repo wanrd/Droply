@@ -41,6 +41,8 @@ public enum MacFileCollector {
                 let rootName = sanitizeSegment(url.lastPathComponent)
                 collectDirectory(at: url, prefix: rootName, fileManager: fm, into: &result)
             } else {
+                let resValues = try? url.resourceValues(forKeys: [.isRegularFileKey])
+                if resValues?.isRegularFile == false { continue }
                 let name = sanitizeSegment(url.lastPathComponent)
                 let size = fileSize(url: url)
                 let isText = textExtensions.contains(url.pathExtension.lowercased())
@@ -66,14 +68,14 @@ public enum MacFileCollector {
     ) {
         guard let entries = try? fileManager.contentsOfDirectory(
             at: directory,
-            includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey, .fileSizeKey],
+            includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey, .isRegularFileKey, .fileSizeKey],
             options: [.skipsHiddenFiles]
         ) else {
             return
         }
 
         for entry in entries.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
-            let values = try? entry.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+            let values = try? entry.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey, .isRegularFileKey])
             if values?.isSymbolicLink == true || PathSanitizer.isSymlink(atPath: entry.path) {
                 continue
             }
@@ -82,7 +84,7 @@ public enum MacFileCollector {
             let relative = "\(prefix)/\(name)"
             if values?.isDirectory == true {
                 collectDirectory(at: entry, prefix: relative, fileManager: fileManager, into: &output)
-            } else {
+            } else if values?.isRegularFile != false {
                 let size = fileSize(url: entry)
                 let isText = textExtensions.contains(entry.pathExtension.lowercased())
                 output.append(.file(url: entry, relativePath: relative, size: size, isText: isText))

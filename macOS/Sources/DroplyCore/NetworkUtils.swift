@@ -40,9 +40,10 @@ public enum NetworkUtils {
             let interface = current.pointee
             let flags = Int32(interface.ifa_flags)
             let isUp = (flags & IFF_UP) != 0
+            let isRunning = (flags & IFF_RUNNING) != 0
             let isLoopback = (flags & IFF_LOOPBACK) != 0
 
-            if isUp && !isLoopback, let addr = interface.ifa_addr, addr.pointee.sa_family == UInt8(AF_INET) {
+            if isUp && isRunning && !isLoopback, let addr = interface.ifa_addr, addr.pointee.sa_family == UInt8(AF_INET) {
                 var hostname = [CChar](repeating: 0, count: Int(NI_MAXHOST))
                 let result = getnameinfo(
                     addr,
@@ -59,7 +60,10 @@ public enum NetworkUtils {
                         as: UTF8.self
                     )
                     let name = String(cString: interface.ifa_name)
-                    let ignoredPrefixes = ["utun", "tun", "tap", "ppp", "ipsec", "awdl", "llw", "anpi", "gif", "stf", "lo"]
+                    let ignoredPrefixes = [
+                        "utun", "tun", "tap", "ppp", "ipsec", "wg", "tailscale", "zt",
+                        "awdl", "llw", "anpi", "gif", "stf", "lo", "vmnet", "vboxnet", "veth"
+                    ]
                     let isIgnored = ignoredPrefixes.contains { name.hasPrefix($0) }
                     // Exclude link-local 169.254.x.x and VPN/virtual interfaces
                     if !isIgnored && !ip.hasPrefix("169.254.") {

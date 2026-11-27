@@ -105,6 +105,7 @@ final class DroplyViewModel: ObservableObject {
     private var lastPromptedUpdateVersion: String?
     private var updateMonitorTask: Task<Void, Never>?
     private var bannerDismissTask: Task<Void, Never>?
+    nonisolated(unsafe) private var wakeObserver: NSObjectProtocol?
     private var isUpdatingBanner = false
 
     var onRequestShowMainWindow: (@MainActor () -> Void)?
@@ -190,6 +191,7 @@ final class DroplyViewModel: ObservableObject {
         loadHistory()
         startServer()
         startNetworkMonitor()
+        startWakeObserver()
         syncBackgroundActivity()
         startUpdateMonitor()
         checkForUpdates(userInitiated: false)
@@ -199,6 +201,9 @@ final class DroplyViewModel: ObservableObject {
         pathMonitor.cancel()
         updateMonitorTask?.cancel()
         bannerDismissTask?.cancel()
+        if let wakeObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
+        }
     }
 
     func toggleTheme() {
@@ -215,6 +220,10 @@ final class DroplyViewModel: ObservableObject {
         updateMonitorTask = nil
         bannerDismissTask?.cancel()
         bannerDismissTask = nil
+        if let wakeObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
+            self.wakeObserver = nil
+        }
         onDismissBannerToast?()
         server?.stop()
         backgroundController.shutdown()
@@ -304,6 +313,22 @@ final class DroplyViewModel: ObservableObject {
             if let data = try? JSONEncoder().encode(snapshot) {
                 try? data.write(to: url, options: .atomic)
                 try? FileManager.default.setAttributes([.posixPermissions: NSNumber(value: 0o600)], ofItemAtPath: url.path)
+            }
+        }
+    }
+
+    private func startWakeObserver() {
+        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.refreshInterfacesIfNeeded()
+                if self.server?.isRunning != true {
+                    self.startServer()
+                }
             }
         }
     }
