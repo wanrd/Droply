@@ -3,13 +3,8 @@ package com.droply.android.ui
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
@@ -76,9 +71,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
@@ -213,9 +206,7 @@ fun DroplyScreen(
     }
 
     Scaffold(
-        modifier = Modifier
-            .fillMaxSize()
-            .then(if (showSettings || (showUpdatePrompt && availableUpdate != null)) Modifier.blur(12.dp) else Modifier),
+        modifier = Modifier.fillMaxSize(),
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             TopHeaderBar(
@@ -486,6 +477,9 @@ fun DroplyScreen(
             currentVersionLabel = currentVersionLabel,
             availableUpdate = availableUpdate,
             isCheckingUpdates = isCheckingUpdates,
+            statusMessage = statusMessage,
+            errorMessage = errorMessage,
+            onDismissBanner = onDismissBanner,
             onCheckForUpdates = onCheckForUpdates,
             onOpenUpdatePrompt = {
                 showSettings = false
@@ -612,7 +606,7 @@ private fun HistoryFilterBar(
             Surface(
                 shape = CircleShape,
                 color = MaterialTheme.colorScheme.surface,
-                shadowElevation = 2.dp,
+                border = BorderStroke(0.8.dp, MaterialTheme.colorScheme.outline),
                 modifier = Modifier
                     .width(tabWidth)
                     .fillMaxHeight()
@@ -800,47 +794,6 @@ private fun TopHeaderBar(
 }
 
 @Composable
-private fun rememberGlassFillBrush(isDarkTheme: Boolean, accentTint: Color? = null): Brush {
-    return remember(isDarkTheme, accentTint) {
-        if (accentTint != null) {
-            Brush.verticalGradient(
-                listOf(
-                    accentTint.copy(alpha = if (isDarkTheme) 0.34f else 0.22f),
-                    accentTint.copy(alpha = if (isDarkTheme) 0.16f else 0.10f)
-                )
-            )
-        } else {
-            Brush.verticalGradient(
-                if (isDarkTheme) {
-                    listOf(Color.White.copy(alpha = 0.13f), Color.White.copy(alpha = 0.05f))
-                } else {
-                    listOf(Color.White.copy(alpha = 0.70f), Color.White.copy(alpha = 0.36f))
-                }
-            )
-        }
-    }
-}
-
-@Composable
-private fun rememberGlassRimBrush(isDarkTheme: Boolean, accentTint: Color? = null): Brush {
-    return remember(isDarkTheme, accentTint) {
-        if (accentTint != null) {
-            Brush.verticalGradient(
-                listOf(accentTint.copy(alpha = 0.68f), accentTint.copy(alpha = 0.24f))
-            )
-        } else {
-            Brush.verticalGradient(
-                if (isDarkTheme) {
-                    listOf(Color.White.copy(alpha = 0.28f), Color.White.copy(alpha = 0.07f))
-                } else {
-                    listOf(Color.White.copy(alpha = 0.94f), Color(0xFFBBD0EB).copy(alpha = 0.52f))
-                }
-            )
-        }
-    }
-}
-
-@Composable
 private fun FrostedGlassBlock(
     isDarkTheme: Boolean,
     modifier: Modifier = Modifier,
@@ -850,15 +803,22 @@ private fun FrostedGlassBlock(
     content: @Composable BoxScope.() -> Unit
 ) {
     val shape = RoundedCornerShape(cornerRadius)
-    val fillBrush = rememberGlassFillBrush(isDarkTheme, accentTint)
-    val rimBrush = rememberGlassRimBrush(isDarkTheme, accentTint)
+    val fillColor = baseColor ?: if (accentTint != null) {
+        accentTint.copy(alpha = if (isDarkTheme) 0.12f else 0.08f)
+    } else {
+        MaterialTheme.colorScheme.surfaceVariant
+    }
+    val borderColor = if (accentTint != null) {
+        accentTint.copy(alpha = 0.28f)
+    } else {
+        MaterialTheme.colorScheme.outline
+    }
 
     Box(
         modifier = modifier
             .clip(shape)
-            .then(if (baseColor != null) Modifier.background(baseColor) else Modifier)
-            .background(fillBrush)
-            .border(1.dp, rimBrush, shape),
+            .background(fillColor)
+            .border(0.9.dp, borderColor, shape),
         content = content
     )
 }
@@ -874,20 +834,28 @@ private fun FrostedGlassPillButton(
     content: @Composable RowScope.() -> Unit
 ) {
     val source = remember { MutableInteractionSource() }
-    val scale = rememberPressScale(source, 0.92f)
-    val fillBrush = rememberGlassFillBrush(isDarkTheme, accentTint)
-    val rimBrush = rememberGlassRimBrush(isDarkTheme, accentTint)
+    val scale = rememberPressScale(source, 0.94f)
+    val fillColor = if (accentTint != null) {
+        accentTint.copy(alpha = if (isDarkTheme) 0.14f else 0.09f)
+    } else {
+        MaterialTheme.colorScheme.surface
+    }
+    val borderColor = if (accentTint != null) {
+        accentTint.copy(alpha = 0.32f)
+    } else {
+        MaterialTheme.colorScheme.outline
+    }
 
     Row(
         modifier = modifier
             .graphicsLayer {
                 scaleX = scale
                 scaleY = scale
-                alpha = if (enabled) 1f else 0.58f
+                alpha = if (enabled) 1f else 0.55f
             }
             .clip(CircleShape)
-            .background(fillBrush)
-            .border(1.dp, rimBrush, CircleShape)
+            .background(fillColor)
+            .border(0.9.dp, borderColor, CircleShape)
             .clickable(
                 interactionSource = source,
                 indication = null,
@@ -910,6 +878,9 @@ private fun SettingsBottomSheet(
     currentVersionLabel: String,
     availableUpdate: AppUpdateInfo?,
     isCheckingUpdates: Boolean,
+    statusMessage: String?,
+    errorMessage: String?,
+    onDismissBanner: () -> Unit,
     onCheckForUpdates: () -> Unit,
     onOpenUpdatePrompt: () -> Unit,
     onToggleTheme: () -> Unit,
@@ -918,11 +889,7 @@ private fun SettingsBottomSheet(
     onDismiss: () -> Unit
 ) {
     var nameDraft by remember(deviceName) { mutableStateOf(deviceName) }
-    val sheetBase = if (isDarkTheme) {
-        Color(0xFF141B29).copy(alpha = 0.80f)
-    } else {
-        Color(0xFFEAF1FB).copy(alpha = 0.82f)
-    }
+    val sheetBase = MaterialTheme.colorScheme.surface
 
     ModalBottomSheet(
         onDismissRequest = {
@@ -930,12 +897,12 @@ private fun SettingsBottomSheet(
             onDismiss()
         },
         containerColor = Color.Transparent,
-        scrimColor = Color.Black.copy(alpha = if (isDarkTheme) 0.42f else 0.20f),
+        scrimColor = Color.Black.copy(alpha = if (isDarkTheme) 0.52f else 0.24f),
         dragHandle = null
     ) {
         FrostedGlassBlock(
             isDarkTheme = isDarkTheme,
-            cornerRadius = 28.dp,
+            cornerRadius = 26.dp,
             baseColor = sheetBase,
             modifier = Modifier
                 .fillMaxWidth()
@@ -951,10 +918,10 @@ private fun SettingsBottomSheet(
                 Box(
                     modifier = Modifier
                         .align(Alignment.CenterHorizontally)
-                        .width(38.dp)
+                        .width(36.dp)
                         .height(4.dp)
                         .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.36f))
+                        .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.32f))
                 )
 
                 Text(
@@ -963,6 +930,18 @@ private fun SettingsBottomSheet(
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onSurface
                 )
+
+                AnimatedVisibility(
+                    visible = errorMessage != null || statusMessage != null,
+                    enter = expandVertically(tween(180)) + fadeIn(tween(180)),
+                    exit = shrinkVertically(tween(140)) + fadeOut(tween(140))
+                ) {
+                    StatusBanner(
+                        text = errorMessage ?: statusMessage.orEmpty(),
+                        isError = errorMessage != null,
+                        onDismiss = onDismissBanner
+                    )
+                }
 
                 // 1. Theme toggle
                 FrostedGlassBlock(
@@ -1052,10 +1031,10 @@ private fun SettingsBottomSheet(
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(12.dp),
                             colors = OutlinedTextFieldDefaults.colors(
-                                focusedContainerColor = Color.White.copy(alpha = if (isDarkTheme) 0.08f else 0.42f),
-                                unfocusedContainerColor = Color.White.copy(alpha = if (isDarkTheme) 0.05f else 0.28f),
-                                focusedBorderColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.72f),
-                                unfocusedBorderColor = Color.White.copy(alpha = if (isDarkTheme) 0.16f else 0.72f)
+                                focusedContainerColor = MaterialTheme.colorScheme.surface,
+                                unfocusedContainerColor = MaterialTheme.colorScheme.surface,
+                                focusedBorderColor = MaterialTheme.colorScheme.primary,
+                                unfocusedBorderColor = MaterialTheme.colorScheme.outline
                             )
                         )
                     }
@@ -1177,11 +1156,7 @@ private fun UpdateAvailableDialog(
     onInstall: () -> Unit,
     onDismiss: () -> Unit
 ) {
-    val cardBase = if (isDarkTheme) {
-        Color(0xFF141B29).copy(alpha = 0.86f)
-    } else {
-        Color(0xFFEFF5FD).copy(alpha = 0.88f)
-    }
+    val cardBase = MaterialTheme.colorScheme.surface
     Dialog(onDismissRequest = onDismiss) {
         FrostedGlassBlock(
             isDarkTheme = isDarkTheme,
@@ -1478,38 +1453,19 @@ private fun QrPortalEmblem(
     isConnecting: Boolean,
     onClick: () -> Unit
 ) {
-    val pulseTransition = rememberInfiniteTransition(label = "qrPortalPulse")
-    val pulseScale by pulseTransition.animateFloat(
-        initialValue = 0.93f,
-        targetValue = 1.07f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 2200, easing = LinearEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "pulseScale"
-    )
-    val pulseAlpha by pulseTransition.animateFloat(
-        initialValue = 0.08f,
-        targetValue = 0.18f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 2200, easing = LinearEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "pulseAlpha"
-    )
-
     val interactionSource = remember { MutableInteractionSource() }
-    val pressScale = rememberPressScale(interactionSource, 0.91f)
+    val pressScale = rememberPressScale(interactionSource, 0.93f)
     val accent = MaterialTheme.colorScheme.primary
 
     Box(
         modifier = Modifier
-            .size(94.dp)
+            .size(88.dp)
             .graphicsLayer {
                 scaleX = pressScale
                 scaleY = pressScale
             }
-            .clip(RoundedCornerShape(28.dp))
+            .clip(RoundedCornerShape(24.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
             .clickable(
                 enabled = !isConnecting,
                 interactionSource = interactionSource,
@@ -1518,32 +1474,14 @@ private fun QrPortalEmblem(
             ),
         contentAlignment = Alignment.Center
     ) {
-        Box(
-            modifier = Modifier
-                .size(86.dp)
-                .graphicsLayer {
-                    scaleX = pulseScale
-                    scaleY = pulseScale
-                }
-                .clip(RoundedCornerShape(26.dp))
-                .background(accent.copy(alpha = pulseAlpha))
-        )
-
-        Box(
-            modifier = Modifier
-                .size(72.dp)
-                .clip(RoundedCornerShape(22.dp))
-                .background(MaterialTheme.colorScheme.surface)
-        )
-
-        Canvas(modifier = Modifier.size(76.dp)) {
+        Canvas(modifier = Modifier.size(68.dp)) {
             val inset = 2.dp.toPx()
             val left = inset
             val top = inset
             val right = size.width - inset
             val bottom = size.height - inset
-            val arm = 12.dp.toPx()
-            val r = 18.dp.toPx()
+            val arm = 10.dp.toPx()
+            val r = 16.dp.toPx()
 
             val cornerPath = Path().apply {
                 moveTo(left, top + r + arm)
@@ -1568,9 +1506,9 @@ private fun QrPortalEmblem(
             }
             drawPath(
                 path = cornerPath,
-                color = accent.copy(alpha = 0.65f),
+                color = accent.copy(alpha = 0.72f),
                 style = Stroke(
-                    width = 2.2.dp.toPx(),
+                    width = 2.dp.toPx(),
                     cap = StrokeCap.Round,
                     join = StrokeJoin.Round
                 )
@@ -1581,7 +1519,7 @@ private fun QrPortalEmblem(
             imageVector = MacIcons.QrCode,
             contentDescription = "Сканировать QR-код",
             tint = accent,
-            modifier = Modifier.size(32.dp)
+            modifier = Modifier.size(30.dp)
         )
     }
 }
@@ -1717,11 +1655,9 @@ private fun BottomTransferProgressBar(
             .padding(horizontal = 16.dp, vertical = 10.dp)
     ) {
         Surface(
-            shape = RoundedCornerShape(22.dp),
+            shape = RoundedCornerShape(20.dp),
             color = MaterialTheme.colorScheme.surface,
-            tonalElevation = 4.dp,
-            shadowElevation = 10.dp,
-            border = BorderStroke(0.8.dp, MaterialTheme.colorScheme.outline),
+            border = BorderStroke(0.9.dp, MaterialTheme.colorScheme.outline),
             modifier = Modifier.fillMaxWidth()
         ) {
             Column(
@@ -1817,14 +1753,7 @@ private fun BottomTransferProgressBar(
                                 transformOrigin = TransformOrigin(0f, 0.5f)
                             }
                             .clip(CircleShape)
-                            .background(
-                                Brush.horizontalGradient(
-                                    listOf(
-                                        MaterialTheme.colorScheme.primary,
-                                        MaterialTheme.colorScheme.primary.copy(alpha = 0.78f)
-                                    )
-                                )
-                            )
+                            .background(MaterialTheme.colorScheme.primary)
                     )
                 }
             }
