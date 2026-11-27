@@ -28,7 +28,9 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -2408,23 +2410,23 @@ private fun StatusBanner(
 
             if (showConnectActions) {
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Surface(
-                        onClick = onRetryConnect,
-                        shape = RoundedCornerShape(10.dp),
-                        color = MaterialTheme.colorScheme.primary
-                    ) {
-                        Text(
-                            text = "Повторить",
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            color = Color.White,
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
-                        )
-                    }
-                    Surface(
+                    BannerActionChip(
+                        label = "Повторить",
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = Color.White,
+                        onClick = onRetryConnect
+                    )
+                    BannerActionChip(
+                        label = "Модем / USB",
+                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
+                        contentColor = MaterialTheme.colorScheme.onSurface,
+                        border = BorderStroke(0.8.dp, MaterialTheme.colorScheme.outline),
                         onClick = {
                             val tetherIntent = Intent("android.settings.TETHER_SETTINGS")
                                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -2434,20 +2436,13 @@ private fun StatusBanner(
                             if (!launched) {
                                 runCatching { context.startActivity(fallbackIntent) }
                             }
-                        },
-                        shape = RoundedCornerShape(10.dp),
-                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
-                        border = BorderStroke(0.8.dp, MaterialTheme.colorScheme.outline)
-                    ) {
-                        Text(
-                            text = "Точка доступа / USB",
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.Medium,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)
-                        )
-                    }
-                    Surface(
+                        }
+                    )
+                    BannerActionChip(
+                        label = "Wi‑Fi",
+                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
+                        contentColor = MaterialTheme.colorScheme.onSurface,
+                        border = BorderStroke(0.8.dp, MaterialTheme.colorScheme.outline),
                         onClick = {
                             runCatching {
                                 context.startActivity(
@@ -2455,22 +2450,37 @@ private fun StatusBanner(
                                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                                 )
                             }
-                        },
-                        shape = RoundedCornerShape(10.dp),
-                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
-                        border = BorderStroke(0.8.dp, MaterialTheme.colorScheme.outline)
-                    ) {
-                        Text(
-                            text = "Wi-Fi",
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.Medium,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)
-                        )
-                    }
+                        }
+                    )
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun BannerActionChip(
+    label: String,
+    containerColor: Color,
+    contentColor: Color,
+    border: BorderStroke? = null,
+    onClick: () -> Unit
+) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(10.dp),
+        color = containerColor,
+        border = border
+    ) {
+        Text(
+            text = label,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = contentColor,
+            maxLines = 1,
+            softWrap = false,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)
+        )
     }
 }
 

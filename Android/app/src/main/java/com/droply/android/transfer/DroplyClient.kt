@@ -48,6 +48,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.isActive
@@ -289,8 +290,34 @@ class DroplyClient {
                     }
                 }
             }
+            scope.launch {
+                _statusMessage.collectLatest { msg ->
+                    if (msg != null && !isBlockingStatusPrompt(msg)) {
+                        delay(BANNER_AUTO_DISMISS_MS)
+                        if (_statusMessage.value == msg) {
+                            _statusMessage.value = null
+                        }
+                    }
+                }
+            }
+            scope.launch {
+                _errorMessage.collectLatest { err ->
+                    if (err != null && !_canRetryConnect.value) {
+                        delay(BANNER_AUTO_DISMISS_MS)
+                        if (_errorMessage.value == err && !_canRetryConnect.value) {
+                            _errorMessage.value = null
+                        }
+                    }
+                }
+            }
         }
         loadHistoryIfNeeded(ctx)
+    }
+
+    private fun isBlockingStatusPrompt(msg: String): Boolean {
+        return msg == "Установка защищённого соединения..." ||
+            msg == "Подтвердите подключение на MacBook..." ||
+            msg == "Ожидание подтверждения на MacBook..."
     }
 
     fun shouldKeepServiceRunning(): Boolean {
@@ -419,7 +446,7 @@ class DroplyClient {
         val banner = UpdateCheckBannerUi(message = message, isError = isError)
         _updateCheckBanner.value = banner
         updateBannerDismissJob = scope.launch {
-            delay(2_000L)
+            delay(BANNER_AUTO_DISMISS_MS)
             if (_updateCheckBanner.value == banner) {
                 _updateCheckBanner.value = null
             }
@@ -484,6 +511,7 @@ class DroplyClient {
         private const val MAX_BATCH_FILES = 50_000
         private const val MAX_BATCH_BYTES = 100L * 1024L * 1024L * 1024L
         private const val DISK_FREE_MARGIN_BYTES = 256L * 1024L * 1024L
+        private const val BANNER_AUTO_DISMISS_MS = 5_000L
     }
 
     fun removeHistoryItem(id: String) {
@@ -742,13 +770,22 @@ class DroplyClient {
             // Also race an unbound socket simultaneously so dead routes fail in ~1 timeout window instead of 3x
             factories.add(false to { Socket() })
 
-            val winner = CompletableDeferred<Pair<Socket, EndpointCandidate>?>()
+            var winnerPair: Pair<Socket, EndpointCandidate>? = null
+            val winnerLock = Any()
             val results = factories.map { (isWifiBound, factory) ->
                 async(Dispatchers.IO) {
                     val attempt = connectAttempt(factory, candidate, connectTimeoutMs)
                     if (attempt.isSuccess) {
                         val connected = attempt.getOrThrow()
-                        if (winner.complete(connected to candidate)) {
+                        val won = synchronized(winnerLock) {
+                            if (winnerPair == null) {
+                                winnerPair = connected to candidate
+                                true
+                            } else {
+                                false
+                            }
+                        }
+                        if (won) {
                             closePendingConnectingSockets(except = connected)
                         } else {
                             runCatching { connected.close() }
@@ -758,10 +795,7 @@ class DroplyClient {
                 }
             }.awaitAll()
 
-            if (winner.isCompleted) {
-                val chosen = winner.getCompleted()
-                if (chosen != null) return@coroutineScope chosen to null
-            }
+            winnerPair?.let { return@coroutineScope it to null }
 
             for ((isWifiBound, attempt) in results) {
                 val err = attempt.exceptionOrNull() as? Exception ?: continue
