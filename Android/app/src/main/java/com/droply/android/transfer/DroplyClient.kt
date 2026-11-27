@@ -670,6 +670,29 @@ class DroplyClient {
         }
     } ?: emptyList()
 
+    private fun connectAttempt(
+        factory: () -> Socket,
+        candidate: EndpointCandidate,
+        connectTimeoutMs: Int
+    ): Result<Socket> {
+        var sock: Socket? = null
+        val attempt = runCatching {
+            val created = factory()
+            sock = created
+            pendingConnectingSocket = created
+            created.connect(InetSocketAddress(candidate.host, candidate.port), connectTimeoutMs)
+            created.tcpNoDelay = true
+            created.keepAlive = true
+            created.sendBufferSize = DroplyProtocol.CHUNK_SIZE * 2
+            created
+        }
+        pendingConnectingSocket = null
+        if (attempt.isFailure) {
+            runCatching { sock?.close() }
+        }
+        return attempt
+    }
+
     private fun tryConnectCandidates(
         candidates: List<EndpointCandidate>,
         wifiNetworks: List<Network>,
@@ -691,52 +714,30 @@ class DroplyClient {
             }
 
             for ((isWifiBound, factory) in factories) {
-                var sock: Socket? = null
-                val attempt = runCatching {
-                    sock = factory()
-                    pendingConnectingSocket = sock
-                    sock!!.tcpNoDelay = true
-                    sock!!.keepAlive = true
-                    sock!!.sendBufferSize = DroplyProtocol.CHUNK_SIZE * 2
-                    sock!!.connect(InetSocketAddress(candidate.host, candidate.port), connectTimeoutMs)
-                    sock!!
-                }
-                pendingConnectingSocket = null
+                val attempt = connectAttempt(factory, candidate, connectTimeoutMs)
                 if (attempt.isSuccess) {
                     return (attempt.getOrThrow() to candidate) to null
-                } else {
-                    runCatching { sock?.close() }
-                    val err = attempt.exceptionOrNull() as? Exception
-                    if (isWifiBound) {
-                        if (preferredWifiError == null || err is ConnectException || err is SocketTimeoutException) {
-                            preferredWifiError = err
-                        }
-                    } else if (fallbackError == null) {
-                        fallbackError = err
+                }
+                val err = attempt.exceptionOrNull() as? Exception
+                val errMsg = err?.message.orEmpty()
+                val isRealRefused = err is ConnectException && errMsg.contains("ECONNREFUSED", ignoreCase = true)
+                if (isWifiBound) {
+                    if (preferredWifiError == null || isRealRefused || err is SocketTimeoutException) {
+                        preferredWifiError = err
                     }
+                } else if (fallbackError == null) {
+                    fallbackError = err
                 }
             }
 
             // Last-resort unbound attempt only if all Wi-Fi-bound sockets failed and might be blocked by vendor policy
             if (wifiNetworks.isNotEmpty()) {
-                var sock: Socket? = null
-                val unboundAttempt = runCatching {
-                    sock = Socket()
-                    pendingConnectingSocket = sock
-                    sock!!.tcpNoDelay = true
-                    sock!!.keepAlive = true
-                    sock!!.sendBufferSize = DroplyProtocol.CHUNK_SIZE * 2
-                    sock!!.connect(InetSocketAddress(candidate.host, candidate.port), connectTimeoutMs)
-                    sock!!
-                }
-                pendingConnectingSocket = null
+                val unboundAttempt = connectAttempt({ Socket() }, candidate, connectTimeoutMs)
                 if (unboundAttempt.isSuccess) {
                     return (unboundAttempt.getOrThrow() to candidate) to null
-                } else {
-                    runCatching { sock?.close() }
-                    if (fallbackError == null) {
-                        fallbackError = unboundAttempt.exceptionOrNull() as? Exception
-                    }
+                }
+                if (fallbackError == null) {
+                    fallbackError = unboundAttempt.exceptionOrNull() as? Exception
                 }
             }
         }
@@ -960,36 +961,47 @@ class DroplyClient {
         wifiInfo: WifiNetworkInfo
     ): String {
         val msg = e.message.orEmpty()
+        val isPermissionDenied = msg.contains("EPERM", ignoreCase = true) ||
+            msg.contains("EACCES", ignoreCase = true)
         val isNoRoute = e is NoRouteToHostException ||
             msg.contains("EHOSTUNREACH", ignoreCase = true) ||
             msg.contains("ENETUNREACH", ignoreCase = true)
-        val isRefused = e is ConnectException ||
-            msg.contains("ECONNREFUSED", ignoreCase = true)
+        val isRefused = !isNoRoute && !isPermissionDenied && (
+            msg.contains("ECONNREFUSED", ignoreCase = true) ||
+                e is ConnectException
+            )
         val isTimeout = e is SocketTimeoutException
+        val phoneIpLabel = wifiInfo.primaryIpv4 ?: "не определён"
+        val diagFooter = "\n(${e.javaClass.simpleName}: ${msg.ifBlank { "error" }.take(90)} · Wi-Fi: $phoneIpLabel)"
 
-        if ((isNoRoute || isTimeout) &&
+        if ((isNoRoute || isTimeout || isPermissionDenied) &&
             wifiInfo.primaryIpv4 != null &&
             wifiInfo.localIpv4Prefixes.isNotEmpty() &&
             !isSameSubnet(host, wifiInfo.localIpv4Prefixes)
         ) {
-            return "Разные подсети Wi-Fi: телефон (${wifiInfo.primaryIpv4}) не в одной сети с MacBook ($host). Подключите оба устройства к одному роутеру (не гостевой сети)."
+            return "Разные подсети Wi-Fi: телефон (${wifiInfo.primaryIpv4}) не в одной сети с MacBook ($host). Подключите оба устройства к одному роутеру (не гостевой сети).$diagFooter"
         }
 
         return when {
+            isPermissionDenied ->
+                "Система заблокировала сокет к MacBook ($host). Проверьте разрешения Wi-Fi/VPN и настройки фоновой сети для Droply на смартфоне.$diagFooter"
             isRefused ->
-                "MacBook ($host) найден в сети, но порт $port закрыт. Откройте Droply на MacBook и нажмите «Обновить QR-код»."
+                "Подключение к MacBook ($host:$port) отклонено (порт закрыт или заблокирован). Проверьте:\n" +
+                    "1. Откройте Droply на MacBook и нажмите «Обновить QR-код»\n" +
+                    "2. На MacBook разрешите Droply доступ к локальной сети (Системные настройки → Конфиденциальность → Локальная сеть)\n" +
+                    "3. Выключите VPN на MacBook и телефоне$diagFooter"
             isTimeout ->
                 "Таймаут подключения к MacBook ($host). Проверьте:\n" +
                     "1. На MacBook разрешите Droply доступ к локальной сети (Системные настройки → Конфиденциальность → Локальная сеть)\n" +
                     "2. MacBook не в спящем режиме и входящие не блокирует файрвол\n" +
-                    "3. В роутере отключена «Изоляция клиентов» (AP Isolation)"
+                    "3. В роутере отключена «Изоляция клиентов» (AP Isolation)$diagFooter"
             isNoRoute ->
                 "Нет маршрута к MacBook ($host). Проверьте:\n" +
                     "1. Отключите VPN на MacBook и телефоне (включая фоновые VPN-туннели)\n" +
                     "2. Оба устройства в одной Wi-Fi сети (не гостевой и без «Изоляции клиентов» в роутере)\n" +
-                    "3. Если включено «Ускорение двух каналов / Wi-Fi+», временно отключите мобильную сеть при подключении"
+                    "3. Если включено «Ускорение двух каналов / Wi-Fi+», временно отключите мобильную сеть при подключении$diagFooter"
             else ->
-                msg.ifBlank { "Не удалось подключиться по Wi-Fi" }
+                "${msg.ifBlank { "Не удалось подключиться по Wi-Fi" }}$diagFooter"
         }
     }
 
