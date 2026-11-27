@@ -2,6 +2,8 @@
 
 Полностью локальное приложение для быстрой двусторонней передачи файлов, текстовых заметок и целых папок любого размера между смартфоном Android и MacBook напрямую по Wi-Fi (без облачных и промежуточных серверов).
 
+## https://wanrd.github.io/Droply/
+
 ## Структура проекта
 - `macOS/` — нативное приложение для macOS (Swift + SwiftUI + `DroplyCore` TCP streaming server)
 - `Android/` — нативное приложение для Android (Kotlin + Jetpack Compose + Material 3 + CameraX + ML Kit QR Scanner)
