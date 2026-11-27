@@ -14,10 +14,9 @@ import javax.net.ssl.HttpsURLConnection
 
 object AppUpdateConfig {
     /**
-     * Вставьте сюда ссылку на GitHub-репозиторий приложения (например, "https://github.com/user/Droply").
-     * Пока строка пустая, фоновая проверка обновлений не выполняется.
+     * Ссылка на GitHub-репозиторий приложения для проверки обновлений.
      */
-    const val GITHUB_REPOSITORY_URL: String = ""
+    const val GITHUB_REPOSITORY_URL: String = "https://github.com/wanrd/Droply"
     const val FALLBACK_VERSION: String = "1.0"
 }
 

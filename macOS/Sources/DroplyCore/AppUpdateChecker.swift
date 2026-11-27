@@ -1,9 +1,8 @@
 import Foundation
 
 public enum AppUpdateConfig {
-    /// Вставьте ссылку на GitHub-репозиторий приложения (например, "https://github.com/user/Droply").
-    /// Пока строка пустая, фоновая проверка обновлений не выполняется.
-    public static let githubRepositoryURL: String = ""
+    /// Ссылка на GitHub-репозиторий приложения для проверки обновлений.
+    public static let githubRepositoryURL: String = "https://github.com/wanrd/Droply"
     public static let fallbackVersion: String = "1.0"
 }
 
