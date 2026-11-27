@@ -34,10 +34,12 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -73,9 +75,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
@@ -152,7 +158,10 @@ private fun rememberPressScale(interactionSource: MutableInteractionSource, pres
 @Composable
 fun DroplyScreen(
     isDarkTheme: Boolean,
+    showSettings: Boolean,
+    onShowSettingsChange: (Boolean) -> Unit,
     onToggleTheme: () -> Unit,
+    onThemeButtonPositioned: (Offset) -> Unit,
     deviceNameFlow: StateFlow<String>,
     requireIncomingConfirmationFlow: StateFlow<Boolean>,
     onUpdateDeviceName: (String) -> Unit,
@@ -197,7 +206,6 @@ fun DroplyScreen(
     val deviceName by deviceNameFlow.collectAsState()
     val requireIncomingConfirmation by requireIncomingConfirmationFlow.collectAsState()
     var showTextComposer by remember { mutableStateOf(false) }
-    var showSettings by remember { mutableStateOf(false) }
     var historyFilter by remember { mutableStateOf(HistoryFilter.ALL) }
 
     val filteredHistory = remember(history, historyFilter) {
@@ -209,30 +217,32 @@ fun DroplyScreen(
     }
 
     val isOverlayOpen = showSettings ||
+        showTextComposer ||
         (showUpdatePrompt && availableUpdate != null) ||
         incomingRequest != null ||
         pendingConfirmation != null
     val backgroundBlur by animateDpAsState(
         targetValue = if (isOverlayOpen) 10.dp else 0.dp,
-        animationSpec = tween(durationMillis = 260, easing = FastOutSlowInEasing),
+        animationSpec = tween(durationMillis = 300, easing = FastOutSlowInEasing),
         label = "overlayBlur"
     )
 
-    Scaffold(
-        modifier = Modifier
-            .fillMaxSize()
-            .then(if (backgroundBlur > 0.5.dp) Modifier.blur(backgroundBlur) else Modifier),
-        containerColor = MaterialTheme.colorScheme.background,
-        topBar = {
-            TopHeaderBar(
-                isDarkTheme = isDarkTheme,
-                availableUpdate = availableUpdate,
-                onOpenUpdatePrompt = onOpenUpdatePrompt,
-                onOpenSettings = { showSettings = true },
-                isConnected = connectionState is ConnectionState.Connected,
-                onRequestDisconnect = onRequestDisconnect
-            )
-        },
+    Box(modifier = Modifier.fillMaxSize()) {
+        Scaffold(
+            modifier = Modifier
+                .fillMaxSize()
+                .then(if (backgroundBlur > 0.5.dp) Modifier.blur(backgroundBlur) else Modifier),
+            containerColor = MaterialTheme.colorScheme.background,
+            topBar = {
+                TopHeaderBar(
+                    isDarkTheme = isDarkTheme,
+                    availableUpdate = availableUpdate,
+                    onOpenUpdatePrompt = onOpenUpdatePrompt,
+                    onOpenSettings = { onShowSettingsChange(true) },
+                    isConnected = connectionState is ConnectionState.Connected,
+                    onRequestDisconnect = onRequestDisconnect
+                )
+            },
         bottomBar = {
             BottomTransferProgressBarHost(
                 isTransferringFlow = isTransferringFlow,
@@ -421,6 +431,31 @@ fun DroplyScreen(
                 }
             }
         }
+        }
+
+        // Smooth in-window Settings overlay (open & close animated uniformly with background blur)
+        SettingsSheetOverlay(
+            visible = showSettings,
+            isDarkTheme = isDarkTheme,
+            deviceName = deviceName,
+            requireIncomingConfirmation = requireIncomingConfirmation,
+            currentVersionLabel = currentVersionLabel,
+            availableUpdate = availableUpdate,
+            isCheckingUpdates = isCheckingUpdates,
+            statusMessage = statusMessage,
+            errorMessage = errorMessage,
+            onDismissBanner = onDismissBanner,
+            onCheckForUpdates = onCheckForUpdates,
+            onOpenUpdatePrompt = {
+                onShowSettingsChange(false)
+                onOpenUpdatePrompt()
+            },
+            onToggleTheme = onToggleTheme,
+            onThemeButtonPositioned = onThemeButtonPositioned,
+            onUpdateDeviceName = onUpdateDeviceName,
+            onUpdateRequireIncomingConfirmation = onUpdateRequireIncomingConfirmation,
+            onDismiss = { onShowSettingsChange(false) }
+        )
     }
 
     if (showTextComposer) {
@@ -482,29 +517,6 @@ fun DroplyScreen(
                 }
             }
         }
-    }
-
-    if (showSettings) {
-        SettingsBottomSheet(
-            isDarkTheme = isDarkTheme,
-            deviceName = deviceName,
-            requireIncomingConfirmation = requireIncomingConfirmation,
-            currentVersionLabel = currentVersionLabel,
-            availableUpdate = availableUpdate,
-            isCheckingUpdates = isCheckingUpdates,
-            statusMessage = statusMessage,
-            errorMessage = errorMessage,
-            onDismissBanner = onDismissBanner,
-            onCheckForUpdates = onCheckForUpdates,
-            onOpenUpdatePrompt = {
-                showSettings = false
-                onOpenUpdatePrompt()
-            },
-            onToggleTheme = onToggleTheme,
-            onUpdateDeviceName = onUpdateDeviceName,
-            onUpdateRequireIncomingConfirmation = onUpdateRequireIncomingConfirmation,
-            onDismiss = { showSettings = false }
-        )
     }
 
     incomingRequest?.let { req ->
@@ -897,7 +909,9 @@ private fun SettingsRowCard(
         shape = RoundedCornerShape(16.dp),
         color = MaterialTheme.colorScheme.surfaceVariant,
         border = BorderStroke(0.9.dp, MaterialTheme.colorScheme.outline),
-        modifier = Modifier.fillMaxWidth()
+        modifier = Modifier
+            .fillMaxWidth()
+            .defaultMinSize(minHeight = 68.dp)
     ) {
         Row(
             modifier = Modifier
@@ -929,7 +943,9 @@ private fun SettingsRowCard(
                     text = title,
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.Medium,
-                    color = MaterialTheme.colorScheme.onSurface
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
                 if (subtitle != null) {
                     Text(
@@ -947,9 +963,9 @@ private fun SettingsRowCard(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SettingsBottomSheet(
+private fun SettingsSheetOverlay(
+    visible: Boolean,
     isDarkTheme: Boolean,
     deviceName: String,
     requireIncomingConfirmation: Boolean,
@@ -962,218 +978,279 @@ private fun SettingsBottomSheet(
     onCheckForUpdates: () -> Unit,
     onOpenUpdatePrompt: () -> Unit,
     onToggleTheme: () -> Unit,
+    onThemeButtonPositioned: (Offset) -> Unit,
     onUpdateDeviceName: (String) -> Unit,
     onUpdateRequireIncomingConfirmation: (Boolean) -> Unit,
     onDismiss: () -> Unit
 ) {
     var nameDraft by remember(deviceName) { mutableStateOf(deviceName) }
 
-    ModalBottomSheet(
-        onDismissRequest = {
-            onUpdateDeviceName(nameDraft)
-            onDismiss()
-        },
-        containerColor = Color.Transparent,
-        scrimColor = Color.Black.copy(alpha = if (isDarkTheme) 0.44f else 0.22f),
-        dragHandle = null
+    AnimatedVisibility(
+        visible = visible,
+        enter = fadeIn(tween(durationMillis = 280, easing = FastOutSlowInEasing)),
+        exit = fadeOut(tween(durationMillis = 240, easing = FastOutSlowInEasing))
     ) {
-        Surface(
-            shape = RoundedCornerShape(24.dp),
-            color = MaterialTheme.colorScheme.surface,
-            border = BorderStroke(0.9.dp, MaterialTheme.colorScheme.outline),
+        val backdropSource = remember { MutableInteractionSource() }
+        Box(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp)
-                .navigationBarsPadding()
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = if (isDarkTheme) 0.44f else 0.22f))
+                .clickable(
+                    interactionSource = backdropSource,
+                    indication = null
+                ) {
+                    onUpdateDeviceName(nameDraft)
+                    onDismiss()
+                }
+        )
+    }
+
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.BottomCenter
+    ) {
+        AnimatedVisibility(
+            visible = visible,
+            enter = slideInVertically(
+                animationSpec = tween(durationMillis = 300, easing = FastOutSlowInEasing),
+                initialOffsetY = { (it * 0.28f).toInt() }
+            ) + scaleIn(
+                animationSpec = tween(durationMillis = 300, easing = FastOutSlowInEasing),
+                initialScale = 0.96f
+            ) + fadeIn(tween(durationMillis = 240, easing = FastOutSlowInEasing)),
+            exit = slideOutVertically(
+                animationSpec = tween(durationMillis = 250, easing = FastOutSlowInEasing),
+                targetOffsetY = { (it * 0.28f).toInt() }
+            ) + scaleOut(
+                animationSpec = tween(durationMillis = 250, easing = FastOutSlowInEasing),
+                targetScale = 0.96f
+            ) + fadeOut(tween(durationMillis = 200, easing = FastOutSlowInEasing))
         ) {
-            Column(
+            val cardSource = remember { MutableInteractionSource() }
+            Surface(
+                shape = RoundedCornerShape(24.dp),
+                color = MaterialTheme.colorScheme.surface,
+                border = BorderStroke(0.9.dp, MaterialTheme.colorScheme.outline),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 18.dp, vertical = 14.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+                    .padding(horizontal = 12.dp, vertical = 10.dp)
+                    .navigationBarsPadding()
+                    .clickable(
+                        interactionSource = cardSource,
+                        indication = null,
+                        onClick = {}
+                    )
             ) {
-                Box(
+                Column(
                     modifier = Modifier
-                        .align(Alignment.CenterHorizontally)
-                        .width(36.dp)
-                        .height(4.dp)
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.34f))
-                )
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
+                        .fillMaxWidth()
+                        .padding(horizontal = 18.dp, vertical = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Text(
-                        text = "Настройки",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurface
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.CenterHorizontally)
+                            .width(36.dp)
+                            .height(4.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.34f))
                     )
 
-                    FrostedGlassPillButton(
-                        isDarkTheme = isDarkTheme,
-                        onClick = {
-                            onUpdateDeviceName(nameDraft)
-                            onDismiss()
-                        },
-                        contentPadding = PaddingValues(8.dp)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Icon(
-                            imageVector = MacIcons.Xmark,
-                            contentDescription = "Закрыть",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(14.dp)
-                        )
-                    }
-                }
-
-                AnimatedVisibility(
-                    visible = errorMessage != null || statusMessage != null,
-                    enter = expandVertically(tween(180)) + fadeIn(tween(180)),
-                    exit = shrinkVertically(tween(140)) + fadeOut(tween(140))
-                ) {
-                    StatusBanner(
-                        text = errorMessage ?: statusMessage.orEmpty(),
-                        isError = errorMessage != null,
-                        onDismiss = onDismissBanner
-                    )
-                }
-
-                // 1. Theme toggle
-                SettingsRowCard(
-                    icon = if (isDarkTheme) MacIcons.SunMaxFill else MacIcons.MoonFill,
-                    title = "Тема оформления",
-                    subtitle = if (isDarkTheme) "Тёмная" else "Светлая"
-                ) {
-                    FrostedGlassPillButton(
-                        isDarkTheme = isDarkTheme,
-                        onClick = onToggleTheme
-                    ) {
-                        Icon(
-                            imageVector = if (isDarkTheme) MacIcons.SunMaxFill else MacIcons.MoonFill,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.size(15.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = if (isDarkTheme) "Светлая" else "Тёмная",
-                            style = MaterialTheme.typography.labelMedium,
+                            text = "Настройки",
+                            style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.SemiBold,
                             color = MaterialTheme.colorScheme.onSurface
                         )
-                    }
-                }
 
-                // 2. Device name
-                Surface(
-                    shape = RoundedCornerShape(16.dp),
-                    color = MaterialTheme.colorScheme.surfaceVariant,
-                    border = BorderStroke(0.9.dp, MaterialTheme.colorScheme.outline),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 13.dp, vertical = 11.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(11.dp)
+                        FrostedGlassPillButton(
+                            isDarkTheme = isDarkTheme,
+                            onClick = {
+                                onUpdateDeviceName(nameDraft)
+                                onDismiss()
+                            },
+                            contentPadding = PaddingValues(8.dp)
                         ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(32.dp)
-                                    .clip(RoundedCornerShape(9.dp))
-                                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = MacIcons.Smartphone,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(16.dp)
+                            Icon(
+                                imageVector = MacIcons.Xmark,
+                                contentDescription = "Закрыть",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(14.dp)
+                            )
+                        }
+                    }
+
+                    AnimatedVisibility(
+                        visible = errorMessage != null || statusMessage != null,
+                        enter = expandVertically(tween(180)) + fadeIn(tween(180)),
+                        exit = shrinkVertically(tween(140)) + fadeOut(tween(140))
+                    ) {
+                        StatusBanner(
+                            text = errorMessage ?: statusMessage.orEmpty(),
+                            isError = errorMessage != null,
+                            onDismiss = onDismissBanner
+                        )
+                    }
+
+                    // 1. Theme toggle (locked dimensions + reports center for circular reveal)
+                    SettingsRowCard(
+                        icon = if (isDarkTheme) MacIcons.SunMaxFill else MacIcons.MoonFill,
+                        title = "Тема оформления",
+                        subtitle = if (isDarkTheme) "Тёмная" else "Светлая"
+                    ) {
+                        FrostedGlassPillButton(
+                            isDarkTheme = isDarkTheme,
+                            onClick = onToggleTheme,
+                            modifier = Modifier
+                                .width(114.dp)
+                                .height(36.dp)
+                                .onGloballyPositioned { coords ->
+                                    onThemeButtonPositioned(coords.boundsInRoot().center)
+                                },
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (isDarkTheme) MacIcons.SunMaxFill else MacIcons.MoonFill,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.size(15.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Box(contentAlignment = Alignment.Center) {
+                                Text(
+                                    text = "Светлая",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    modifier = Modifier.alpha(0f)
+                                )
+                                Text(
+                                    text = if (isDarkTheme) "Светлая" else "Тёмная",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurface
                                 )
                             }
-                            Text(
-                                text = "Имя устройства",
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.Medium,
-                                color = MaterialTheme.colorScheme.onSurface
+                        }
+                    }
+
+                    // 2. Device name (fixed padding & height across themes)
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        border = BorderStroke(0.9.dp, MaterialTheme.colorScheme.outline),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 13.dp, vertical = 11.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(11.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(32.dp)
+                                        .clip(RoundedCornerShape(9.dp))
+                                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = MacIcons.Smartphone,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                                Text(
+                                    text = "Имя устройства",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Medium,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                            OutlinedTextField(
+                                value = nameDraft,
+                                onValueChange = { next ->
+                                    nameDraft = next
+                                    val trimmed = next.trim()
+                                    if (trimmed.isNotEmpty()) {
+                                        onUpdateDeviceName(trimmed)
+                                    }
+                                },
+                                singleLine = true,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(min = 50.dp),
+                                shape = RoundedCornerShape(11.dp),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedContainerColor = MaterialTheme.colorScheme.surface,
+                                    unfocusedContainerColor = MaterialTheme.colorScheme.surface,
+                                    focusedBorderColor = MaterialTheme.colorScheme.primary,
+                                    unfocusedBorderColor = MaterialTheme.colorScheme.outline
+                                )
                             )
                         }
-                        OutlinedTextField(
-                            value = nameDraft,
-                            onValueChange = { next ->
-                                nameDraft = next
-                                val trimmed = next.trim()
-                                if (trimmed.isNotEmpty()) {
-                                    onUpdateDeviceName(trimmed)
-                                }
-                            },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(11.dp),
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedContainerColor = MaterialTheme.colorScheme.surface,
-                                unfocusedContainerColor = MaterialTheme.colorScheme.surface,
-                                focusedBorderColor = MaterialTheme.colorScheme.primary,
-                                unfocusedBorderColor = MaterialTheme.colorScheme.outline
-                            )
+                    }
+
+                    // 3. Confirm before receiving files
+                    SettingsRowCard(
+                        icon = MacIcons.CheckmarkShield,
+                        title = "Подтверждать приём",
+                        subtitle = "Спрашивать перед приёмом"
+                    ) {
+                        Switch(
+                            checked = requireIncomingConfirmation,
+                            onCheckedChange = onUpdateRequireIncomingConfirmation
                         )
                     }
-                }
 
-                // 3. Confirm before receiving files
-                SettingsRowCard(
-                    icon = MacIcons.CheckmarkShield,
-                    title = "Подтверждать приём",
-                    subtitle = "Спрашивать перед получением файлов"
-                ) {
-                    Switch(
-                        checked = requireIncomingConfirmation,
-                        onCheckedChange = onUpdateRequireIncomingConfirmation
-                    )
-                }
-
-                // 4. App updates
-                SettingsRowCard(
-                    icon = MacIcons.ArrowDownCircle,
-                    title = "Обновление приложения",
-                    subtitle = availableUpdate?.let { "Доступна версия ${it.latestVersion}" }
-                        ?: "Версия $currentVersionLabel",
-                    subtitleAccent = availableUpdate != null
-                ) {
-                    FrostedGlassPillButton(
-                        isDarkTheme = isDarkTheme,
-                        enabled = !isCheckingUpdates,
-                        accentTint = if (availableUpdate != null) MaterialTheme.colorScheme.primary else null,
-                        onClick = {
-                            if (availableUpdate != null) {
-                                onOpenUpdatePrompt()
-                            } else {
-                                onCheckForUpdates()
-                            }
-                        }
+                    // 4. App updates (aligned fixed pill size)
+                    SettingsRowCard(
+                        icon = MacIcons.ArrowDownCircle,
+                        title = "Обновление",
+                        subtitle = availableUpdate?.let { "Доступна версия ${it.latestVersion}" }
+                            ?: "Версия $currentVersionLabel",
+                        subtitleAccent = availableUpdate != null
                     ) {
-                        Text(
-                            text = when {
-                                availableUpdate != null -> "Обновить"
-                                isCheckingUpdates -> "Поиск..."
-                                else -> "Проверить"
-                            },
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            color = if (availableUpdate != null) {
-                                MaterialTheme.colorScheme.primary
-                            } else {
-                                MaterialTheme.colorScheme.onSurface
+                        FrostedGlassPillButton(
+                            isDarkTheme = isDarkTheme,
+                            enabled = !isCheckingUpdates,
+                            accentTint = if (availableUpdate != null) MaterialTheme.colorScheme.primary else null,
+                            modifier = Modifier
+                                .width(114.dp)
+                                .height(36.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            onClick = {
+                                if (availableUpdate != null) {
+                                    onOpenUpdatePrompt()
+                                } else {
+                                    onCheckForUpdates()
+                                }
                             }
-                        )
+                        ) {
+                            Text(
+                                text = when {
+                                    availableUpdate != null -> "Обновить"
+                                    isCheckingUpdates -> "Поиск..."
+                                    else -> "Проверить"
+                                },
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = if (availableUpdate != null) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.onSurface
+                                }
+                            )
+                        }
                     }
                 }
             }

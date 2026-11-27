@@ -15,11 +15,17 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.shape.GenericShape
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -30,7 +36,11 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
@@ -48,6 +58,7 @@ import com.droply.android.ui.QRScannerOverlay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.math.hypot
 
 class MainActivity : ComponentActivity() {
 
@@ -66,7 +77,12 @@ class MainActivity : ComponentActivity() {
                 mutableStateOf(client.getPersistedDarkTheme(appCtx, systemDark))
             }
             var showScanner by rememberSaveable { mutableStateOf(false) }
+            var showSettings by rememberSaveable { mutableStateOf(false) }
             var pendingConfirmation by remember { mutableStateOf<PendingConfirmationUi?>(null) }
+            var themeButtonOrigin by remember { mutableStateOf<Offset?>(null) }
+            var themeRevealActive by remember { mutableStateOf(false) }
+            var themeRevealOrigin by remember { mutableStateOf(Offset.Zero) }
+            val themeRevealProgress = remember { Animatable(0f) }
 
             val view = LocalView.current
             val scope = rememberCoroutineScope()
@@ -96,8 +112,13 @@ class MainActivity : ComponentActivity() {
                 showScanner = false
             }
 
+            BackHandler(enabled = !showScanner && showSettings) {
+                showSettings = false
+            }
+
             BackHandler(
                 enabled = !showScanner &&
+                    !showSettings &&
                     (isTransferring || connectionState is ConnectionState.Connected)
             ) {
                 // Move app cleanly to background instead of destroying the Activity.
@@ -219,112 +240,199 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            DroplyTheme(darkTheme = isDarkTheme) {
-                Box(modifier = Modifier.fillMaxSize()) {
-                    DroplyScreen(
-                        isDarkTheme = isDarkTheme,
-                        onToggleTheme = {
-                            val next = !isDarkTheme
-                            isDarkTheme = next
-                            client.setPersistedDarkTheme(appCtx, next)
-                        },
-                        deviceNameFlow = client.deviceName,
-                        requireIncomingConfirmationFlow = client.requireIncomingConfirmation,
-                        onUpdateDeviceName = remember(client) { { name -> client.setDeviceName(name) } },
-                        onUpdateRequireIncomingConfirmation = remember(client) {
-                            { require -> client.setRequireIncomingConfirmation(require) }
-                        },
-                        connectionStateFlow = client.connectionState,
-                        isTransferringFlow = client.isTransferring,
-                        progressFlow = client.progress,
-                        historyFlow = client.history,
-                        incomingRequestFlow = client.incomingRequest,
-                        statusMessageFlow = client.statusMessage,
-                        errorMessageFlow = client.errorMessage,
-                        availableUpdateFlow = client.availableUpdate,
-                        showUpdatePromptFlow = client.showUpdatePrompt,
-                        isCheckingUpdatesFlow = client.isCheckingForUpdates,
-                        currentVersionLabel = remember(appCtx) { client.currentAppVersion(appCtx) },
-                        onCheckForUpdates = remember(client, appCtx) {
-                            { client.checkForUpdates(appCtx, userInitiated = true) }
-                        },
-                        onOpenUpdatePrompt = remember(client) { { client.presentUpdatePrompt() } },
-                        onDismissUpdatePrompt = remember(client) { { client.dismissUpdatePrompt() } },
-                        onInstallUpdate = remember(client, appCtx) {
-                            { client.openUpdateOnGitHub(appCtx) }
-                        },
-                        pendingConfirmation = pendingConfirmation,
-                        onDismissConfirmation = remember { { pendingConfirmation = null } },
-                        onDismissBanner = remember(client) { { client.clearMessages() } },
-                        onOpenScanner = remember(context) {
-                            {
-                                val hasPerm = ContextCompat.checkSelfPermission(
-                                    context,
-                                    Manifest.permission.CAMERA
-                                ) == PackageManager.PERMISSION_GRANTED
-                                if (hasPerm) {
-                                    showScanner = true
-                                } else {
-                                    cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+            val density = LocalDensity.current
+
+            BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                val rootWidthPx = with(density) { maxWidth.toPx() }.coerceAtLeast(1f)
+                val rootHeightPx = with(density) { maxHeight.toPx() }.coerceAtLeast(1f)
+
+                fun triggerRadialThemeToggle() {
+                    if (themeRevealActive) return
+                    val nextDark = !isDarkTheme
+                    val fallbackOrigin = Offset(rootWidthPx - 96f, rootHeightPx * 0.55f)
+                    val origin = themeButtonOrigin ?: fallbackOrigin
+                    themeRevealOrigin = origin
+                    client.setPersistedDarkTheme(appCtx, nextDark)
+
+                    scope.launch {
+                        themeRevealActive = true
+                        if (!nextDark) {
+                            // Dark -> Light: expand Light theme radially outward from button
+                            themeRevealProgress.snapTo(0f)
+                            themeRevealProgress.animateTo(
+                                targetValue = 1f,
+                                animationSpec = tween(
+                                    durationMillis = 460,
+                                    easing = CubicBezierEasing(0.25f, 0.45f, 0.22f, 1.0f)
+                                )
+                            )
+                        } else {
+                            // Light -> Dark: shrink Light theme radially back into button
+                            isDarkTheme = true
+                            themeRevealProgress.snapTo(1f)
+                            themeRevealProgress.animateTo(
+                                targetValue = 0f,
+                                animationSpec = tween(
+                                    durationMillis = 460,
+                                    easing = CubicBezierEasing(0.25f, 0.45f, 0.22f, 1.0f)
+                                )
+                            )
+                        }
+                        isDarkTheme = nextDark
+                        themeRevealActive = false
+                    }
+                }
+
+                @Composable
+                fun DroplyStage(dark: Boolean, trackOrigin: Boolean) {
+                    DroplyTheme(darkTheme = dark) {
+                        DroplyScreen(
+                            isDarkTheme = dark,
+                            showSettings = showSettings,
+                            onShowSettingsChange = { showSettings = it },
+                            onToggleTheme = { triggerRadialThemeToggle() },
+                            onThemeButtonPositioned = { pos ->
+                                if (trackOrigin) {
+                                    themeButtonOrigin = pos
+                                }
+                            },
+                            deviceNameFlow = client.deviceName,
+                            requireIncomingConfirmationFlow = client.requireIncomingConfirmation,
+                            onUpdateDeviceName = remember(client) { { name -> client.setDeviceName(name) } },
+                            onUpdateRequireIncomingConfirmation = remember(client) {
+                                { require -> client.setRequireIncomingConfirmation(require) }
+                            },
+                            connectionStateFlow = client.connectionState,
+                            isTransferringFlow = client.isTransferring,
+                            progressFlow = client.progress,
+                            historyFlow = client.history,
+                            incomingRequestFlow = client.incomingRequest,
+                            statusMessageFlow = client.statusMessage,
+                            errorMessageFlow = client.errorMessage,
+                            availableUpdateFlow = client.availableUpdate,
+                            showUpdatePromptFlow = client.showUpdatePrompt,
+                            isCheckingUpdatesFlow = client.isCheckingForUpdates,
+                            currentVersionLabel = remember(appCtx) { client.currentAppVersion(appCtx) },
+                            onCheckForUpdates = remember(client, appCtx) {
+                                { client.checkForUpdates(appCtx, userInitiated = true) }
+                            },
+                            onOpenUpdatePrompt = remember(client) { { client.presentUpdatePrompt() } },
+                            onDismissUpdatePrompt = remember(client) { { client.dismissUpdatePrompt() } },
+                            onInstallUpdate = remember(client, appCtx) {
+                                { client.openUpdateOnGitHub(appCtx) }
+                            },
+                            pendingConfirmation = pendingConfirmation,
+                            onDismissConfirmation = remember { { pendingConfirmation = null } },
+                            onDismissBanner = remember(client) { { client.clearMessages() } },
+                            onOpenScanner = remember(context) {
+                                {
+                                    val hasPerm = ContextCompat.checkSelfPermission(
+                                        context,
+                                        Manifest.permission.CAMERA
+                                    ) == PackageManager.PERMISSION_GRANTED
+                                    if (hasPerm) {
+                                        showScanner = true
+                                    } else {
+                                        cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                                    }
+                                }
+                            },
+                            onPickFiles = remember { { filesPickerLauncher.launch(arrayOf("*/*")) } },
+                            onPickFolder = remember { { folderPickerLauncher.launch(null) } },
+                            onSendTextNote = { fileName, content ->
+                                val note = FileTreeCollector.buildTextNoteItem(fileName, content)
+                                confirmAndSend(listOf(note), "текстовый файл «${note.relativePath}»")
+                            },
+                            onCopyTextRecord = remember(client, appCtx) {
+                                { record -> client.copyTextRecord(appCtx, record) }
+                            },
+                            onRequestDeleteItem = remember(client) {
+                                { record ->
+                                    val shortName = record.relativePath.substringAfterLast('/')
+                                    pendingConfirmation = PendingConfirmationUi(
+                                        message = "Вы уверены, что хотите удалить «$shortName» из истории?",
+                                        isDestructive = true,
+                                        onConfirm = { client.removeHistoryItem(record.id) }
+                                    )
+                                }
+                            },
+                            onRespondIncoming = remember(client) {
+                                { accepted -> client.respondToIncomingBatch(accepted) }
+                            },
+                            onRequestCancelTransfer = remember(client) {
+                                {
+                                    pendingConfirmation = PendingConfirmationUi(
+                                        message = "Вы уверены, что хотите отменить текущую передачу файлов?",
+                                        isDestructive = true,
+                                        onConfirm = { client.cancelTransfer() }
+                                    )
+                                }
+                            },
+                            onRequestDisconnect = remember(client) {
+                                {
+                                    pendingConfirmation = PendingConfirmationUi(
+                                        message = "Вы уверены, что хотите отключиться от MacBook?",
+                                        isDestructive = true,
+                                        onConfirm = { client.disconnect() }
+                                    )
+                                }
+                            },
+                            onRequestClearHistory = remember(client) {
+                                {
+                                    pendingConfirmation = PendingConfirmationUi(
+                                        message = "Вы уверены, что хотите очистить всю историю файлов?",
+                                        isDestructive = true,
+                                        onConfirm = { client.clearHistory() }
+                                    )
                                 }
                             }
-                        },
-                        onPickFiles = remember { { filesPickerLauncher.launch(arrayOf("*/*")) } },
-                        onPickFolder = remember { { folderPickerLauncher.launch(null) } },
-                        onSendTextNote = { fileName, content ->
-                            val note = FileTreeCollector.buildTextNoteItem(fileName, content)
-                            confirmAndSend(listOf(note), "текстовый файл «${note.relativePath}»")
-                        },
-                        onCopyTextRecord = remember(client, appCtx) {
-                            { record -> client.copyTextRecord(appCtx, record) }
-                        },
-                        onRequestDeleteItem = remember(client) {
-                            { record ->
-                                val shortName = record.relativePath.substringAfterLast('/')
-                                pendingConfirmation = PendingConfirmationUi(
-                                    message = "Вы уверены, что хотите удалить «$shortName» из истории?",
-                                    isDestructive = true,
-                                    onConfirm = { client.removeHistoryItem(record.id) }
-                                )
-                            }
-                        },
-                        onRespondIncoming = remember(client) {
-                            { accepted -> client.respondToIncomingBatch(accepted) }
-                        },
-                        onRequestCancelTransfer = remember(client) {
-                            {
-                                pendingConfirmation = PendingConfirmationUi(
-                                    message = "Вы уверены, что хотите отменить текущую передачу файлов?",
-                                    isDestructive = true,
-                                    onConfirm = { client.cancelTransfer() }
-                                )
-                            }
-                        },
-                        onRequestDisconnect = remember(client) {
-                            {
-                                pendingConfirmation = PendingConfirmationUi(
-                                    message = "Вы уверены, что хотите отключиться от MacBook?",
-                                    isDestructive = true,
-                                    onConfirm = { client.disconnect() }
-                                )
-                            }
-                        },
-                        onRequestClearHistory = remember(client) {
-                            {
-                                pendingConfirmation = PendingConfirmationUi(
-                                    message = "Вы уверены, что хотите очистить всю историю файлов?",
-                                    isDestructive = true,
-                                    onConfirm = { client.clearHistory() }
-                                )
-                            }
-                        }
-                    )
+                        )
+                    }
+                }
 
-                    AnimatedVisibility(
-                        visible = showScanner,
-                        enter = fadeIn(),
-                        exit = fadeOut()
+                if (!themeRevealActive) {
+                    DroplyStage(dark = isDarkTheme, trackOrigin = true)
+                } else {
+                    // Base: Dark navy theme; Top: Light theme revealed/collapsed circularly at button center
+                    DroplyStage(dark = true, trackOrigin = false)
+
+                    val maxRadius = remember(themeRevealOrigin, rootWidthPx, rootHeightPx) {
+                        val ox = themeRevealOrigin.x
+                        val oy = themeRevealOrigin.y
+                        maxOf(
+                            hypot(ox, oy),
+                            hypot(rootWidthPx - ox, oy),
+                            hypot(ox, rootHeightPx - oy),
+                            hypot(rootWidthPx - ox, rootHeightPx - oy)
+                        ) + 24f
+                    }
+                    val currentRadius = (themeRevealProgress.value * maxRadius).coerceAtLeast(1f)
+                    val revealShape = GenericShape { _, _ ->
+                        addOval(
+                            Rect(
+                                left = themeRevealOrigin.x - currentRadius,
+                                top = themeRevealOrigin.y - currentRadius,
+                                right = themeRevealOrigin.x + currentRadius,
+                                bottom = themeRevealOrigin.y + currentRadius
+                            )
+                        )
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .clip(revealShape)
                     ) {
+                        DroplyStage(dark = false, trackOrigin = false)
+                    }
+                }
+
+                AnimatedVisibility(
+                    visible = showScanner,
+                    enter = fadeIn(),
+                    exit = fadeOut()
+                ) {
+                    DroplyTheme(darkTheme = isDarkTheme) {
                         QRScannerOverlay(
                             onPayloadScanned = { payload ->
                                 showScanner = false
