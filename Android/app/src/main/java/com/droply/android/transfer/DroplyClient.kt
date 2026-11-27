@@ -189,6 +189,9 @@ class DroplyClient {
     val updateCheckBanner: StateFlow<UpdateCheckBannerUi?> = _updateCheckBanner.asStateFlow()
 
     @Volatile
+    private var updateBannerDismissJob: Job? = null
+
+    @Volatile
     private var lastUpdateCheckMs: Long = 0L
 
     @Volatile
@@ -369,7 +372,21 @@ class DroplyClient {
     }
 
     fun clearUpdateCheckBanner() {
+        updateBannerDismissJob?.cancel()
+        updateBannerDismissJob = null
         _updateCheckBanner.value = null
+    }
+
+    private fun showUpdateCheckBanner(message: String, isError: Boolean = false) {
+        updateBannerDismissJob?.cancel()
+        val banner = UpdateCheckBannerUi(message = message, isError = isError)
+        _updateCheckBanner.value = banner
+        updateBannerDismissJob = scope.launch {
+            delay(2_000L)
+            if (_updateCheckBanner.value == banner) {
+                _updateCheckBanner.value = null
+            }
+        }
     }
 
     fun setDeviceName(name: String) {
@@ -1388,7 +1405,7 @@ class DroplyClient {
         val ctx = context.applicationContext
         if (!AppUpdateChecker.isConfigured()) {
             if (userInitiated) {
-                _updateCheckBanner.value = UpdateCheckBannerUi(
+                showUpdateCheckBanner(
                     message = "Ссылка на GitHub ещё не настроена (версия ${currentAppVersion(ctx)})",
                     isError = false
                 )
@@ -1402,7 +1419,7 @@ class DroplyClient {
         }
         if (_isCheckingForUpdates.value) return
         if (userInitiated) {
-            _updateCheckBanner.value = null
+            clearUpdateCheckBanner()
         }
         _isCheckingForUpdates.value = true
 
@@ -1420,7 +1437,7 @@ class DroplyClient {
                     lastUpdateCheckMs = System.currentTimeMillis()
                     val info = outcome.info
                     _availableUpdate.value = info
-                    _updateCheckBanner.value = null
+                    clearUpdateCheckBanner()
                     val signature = info.promptSignature
                     if (userInitiated || lastPromptedUpdateVersion != signature) {
                         lastPromptedUpdateVersion = signature
@@ -1432,7 +1449,7 @@ class DroplyClient {
                     lastUpdateCheckMs = System.currentTimeMillis()
                     _availableUpdate.value = null
                     if (userInitiated) {
-                        _updateCheckBanner.value = UpdateCheckBannerUi(
+                        showUpdateCheckBanner(
                             message = "У вас установлена актуальная версия (${currentAppVersion(ctx)})",
                             isError = false
                         )
@@ -1440,7 +1457,7 @@ class DroplyClient {
                 }
                 com.droply.android.update.UpdateCheckOutcome.NotConfigured -> {
                     if (userInitiated) {
-                        _updateCheckBanner.value = UpdateCheckBannerUi(
+                        showUpdateCheckBanner(
                             message = "Ссылка на GitHub ещё не настроена (версия ${currentAppVersion(ctx)})",
                             isError = false
                         )
@@ -1448,7 +1465,7 @@ class DroplyClient {
                 }
                 com.droply.android.update.UpdateCheckOutcome.NetworkFailed -> {
                     if (userInitiated) {
-                        _updateCheckBanner.value = UpdateCheckBannerUi(
+                        showUpdateCheckBanner(
                             message = "Не удалось связаться с GitHub для проверки обновлений",
                             isError = true
                         )
