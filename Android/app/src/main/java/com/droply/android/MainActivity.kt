@@ -332,6 +332,10 @@ class MainActivity : ComponentActivity() {
                             incomingRequestFlow = client.incomingRequest,
                             statusMessageFlow = client.statusMessage,
                             errorMessageFlow = client.errorMessage,
+                            canRetryConnectFlow = client.canRetryConnect,
+                            onRetryConnect = remember(client, appCtx) {
+                                { client.retryLastConnect(appCtx) }
+                            },
                             updateCheckBannerFlow = client.updateCheckBanner,
                             availableUpdateFlow = client.availableUpdate,
                             showUpdatePromptFlow = client.showUpdatePrompt,

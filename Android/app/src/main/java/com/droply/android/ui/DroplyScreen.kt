@@ -1,5 +1,7 @@
 package com.droply.android.ui
 
+import android.content.Intent
+import android.provider.Settings
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
@@ -190,6 +192,8 @@ fun DroplyScreen(
     incomingRequestFlow: StateFlow<IncomingBatchRequestUi?>,
     statusMessageFlow: StateFlow<String?>,
     errorMessageFlow: StateFlow<String?>,
+    canRetryConnectFlow: StateFlow<Boolean>,
+    onRetryConnect: () -> Unit,
     updateCheckBannerFlow: StateFlow<UpdateCheckBannerUi?>,
     availableUpdateFlow: StateFlow<AppUpdateInfo?>,
     showUpdatePromptFlow: StateFlow<Boolean>,
@@ -218,6 +222,7 @@ fun DroplyScreen(
     val history by historyFlow.collectAsState()
     val statusMessage by statusMessageFlow.collectAsState()
     val errorMessage by errorMessageFlow.collectAsState()
+    val canRetryConnect by canRetryConnectFlow.collectAsState()
     val updateCheckBanner by updateCheckBannerFlow.collectAsState()
     val incomingRequest by incomingRequestFlow.collectAsState()
     val availableUpdate by availableUpdateFlow.collectAsState()
@@ -289,6 +294,8 @@ fun DroplyScreen(
                     StatusBanner(
                         text = errorMessage ?: statusMessage.orEmpty(),
                         isError = isError,
+                        showConnectActions = isError && canRetryConnect,
+                        onRetryConnect = onRetryConnect,
                         onDismiss = onDismissBanner
                     )
                 }
@@ -2346,50 +2353,122 @@ private fun PhotoPreviewOverlay(
 private fun StatusBanner(
     text: String,
     isError: Boolean,
+    showConnectActions: Boolean = false,
+    onRetryConnect: () -> Unit = {},
     onDismiss: () -> Unit
 ) {
     val tint = if (isError) MaterialTheme.colorScheme.error else Color(0xFF16A34A)
+    val context = LocalContext.current
     Surface(
         shape = RoundedCornerShape(15.dp),
         color = tint.copy(alpha = 0.11f),
         modifier = Modifier.fillMaxWidth()
     ) {
-        Row(
+        Column(
             modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Icon(
-                imageVector = if (isError) MacIcons.ExclamationTriangleFill else MacIcons.CheckmarkCircleFill,
-                contentDescription = null,
-                tint = tint,
-                modifier = Modifier.size(18.dp)
-            )
-            Text(
-                text = text,
-                style = MaterialTheme.typography.bodySmall,
-                fontWeight = FontWeight.Medium,
-                color = MaterialTheme.colorScheme.onBackground,
-                modifier = Modifier.weight(1f)
-            )
-            val dismissSource = remember { MutableInteractionSource() }
-            val dismissScale = rememberPressScale(dismissSource, 0.88f)
-            IconButton(
-                onClick = onDismiss,
-                interactionSource = dismissSource,
-                modifier = Modifier
-                    .size(24.dp)
-                    .graphicsLayer {
-                        scaleX = dismissScale
-                        scaleY = dismissScale
-                    }
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Icon(
-                    imageVector = MacIcons.Xmark,
-                    contentDescription = "Закрыть",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(15.dp)
+                    imageVector = if (isError) MacIcons.ExclamationTriangleFill else MacIcons.CheckmarkCircleFill,
+                    contentDescription = null,
+                    tint = tint,
+                    modifier = Modifier.size(18.dp)
                 )
+                Text(
+                    text = text,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    modifier = Modifier.weight(1f)
+                )
+                val dismissSource = remember { MutableInteractionSource() }
+                val dismissScale = rememberPressScale(dismissSource, 0.88f)
+                IconButton(
+                    onClick = onDismiss,
+                    interactionSource = dismissSource,
+                    modifier = Modifier
+                        .size(24.dp)
+                        .graphicsLayer {
+                            scaleX = dismissScale
+                            scaleY = dismissScale
+                        }
+                ) {
+                    Icon(
+                        imageVector = MacIcons.Xmark,
+                        contentDescription = "Закрыть",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(15.dp)
+                    )
+                }
+            }
+
+            if (showConnectActions) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Surface(
+                        onClick = onRetryConnect,
+                        shape = RoundedCornerShape(10.dp),
+                        color = MaterialTheme.colorScheme.primary
+                    ) {
+                        Text(
+                            text = "Повторить",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color.White,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
+                        )
+                    }
+                    Surface(
+                        onClick = {
+                            val tetherIntent = Intent("android.settings.TETHER_SETTINGS")
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            val fallbackIntent = Intent(Settings.ACTION_WIRELESS_SETTINGS)
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            val launched = runCatching { context.startActivity(tetherIntent) }.isSuccess
+                            if (!launched) {
+                                runCatching { context.startActivity(fallbackIntent) }
+                            }
+                        },
+                        shape = RoundedCornerShape(10.dp),
+                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
+                        border = BorderStroke(0.8.dp, MaterialTheme.colorScheme.outline)
+                    ) {
+                        Text(
+                            text = "Точка доступа / USB",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)
+                        )
+                    }
+                    Surface(
+                        onClick = {
+                            runCatching {
+                                context.startActivity(
+                                    Intent(Settings.ACTION_WIFI_SETTINGS)
+                                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                )
+                            }
+                        },
+                        shape = RoundedCornerShape(10.dp),
+                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
+                        border = BorderStroke(0.8.dp, MaterialTheme.colorScheme.outline)
+                    ) {
+                        Text(
+                            text = "Wi-Fi",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)
+                        )
+                    }
+                }
             }
         }
     }

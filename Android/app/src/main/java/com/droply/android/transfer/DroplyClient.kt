@@ -40,7 +40,10 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -177,6 +180,12 @@ class DroplyClient {
     private val _errorMessage = MutableStateFlow<String?>(null)
     val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
 
+    private val _canRetryConnect = MutableStateFlow(false)
+    val canRetryConnect: StateFlow<Boolean> = _canRetryConnect.asStateFlow()
+
+    @Volatile
+    private var lastPairingPayload: QRPairingPayload? = null
+
     private val _deviceName = MutableStateFlow(defaultDeviceName())
     val deviceName: StateFlow<String> = _deviceName.asStateFlow()
 
@@ -216,8 +225,7 @@ class DroplyClient {
     @Volatile
     private var socket: Socket? = null
 
-    @Volatile
-    private var pendingConnectingSocket: Socket? = null
+    private val pendingConnectingSockets = ConcurrentHashMap.newKeySet<Socket>()
 
     @Volatile
     private var outputStream: OutputStream? = null
@@ -300,10 +308,27 @@ class DroplyClient {
 
     fun startConnect(context: Context, payload: QRPairingPayload) {
         bindApplicationContext(context)
-        runCatching { pendingConnectingSocket?.close() }
+        lastPairingPayload = payload
+        _canRetryConnect.value = false
+        closePendingConnectingSockets()
         scope.launch {
             connect(context.applicationContext, payload)
         }
+    }
+
+    private fun closePendingConnectingSockets(except: Socket? = null) {
+        val snapshot = pendingConnectingSockets.toList()
+        for (s in snapshot) {
+            if (s !== except) {
+                pendingConnectingSockets.remove(s)
+                runCatching { s.close() }
+            }
+        }
+    }
+
+    fun retryLastConnect(context: Context) {
+        val payload = lastPairingPayload ?: return
+        startConnect(context, payload)
     }
 
     fun startSendItems(context: Context, items: List<TransferItem>) {
@@ -380,6 +405,7 @@ class DroplyClient {
     fun clearMessages() {
         _statusMessage.value = null
         _errorMessage.value = null
+        _canRetryConnect.value = false
     }
 
     fun clearUpdateCheckBanner() {
@@ -511,7 +537,9 @@ class DroplyClient {
             val key = network.toString()
             if (!seen.add(key)) return
             val caps = cm.getNetworkCapabilities(network) ?: return
-            if (!caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) return
+            val isLocalLanTransport = caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
+            if (!isLocalLanTransport) return
             if (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
                 !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
@@ -524,7 +552,9 @@ class DroplyClient {
         maybeAdd(active)
         val rest = cm.allNetworks.sortedByDescending { net ->
             val caps = cm.getNetworkCapabilities(net)
-            if (caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true) 1 else 0
+            val usbPriority = if (caps?.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) == true) 2 else 0
+            val validatedPriority = if (caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true) 1 else 0
+            usbPriority + validatedPriority
         }
         rest.forEach(::maybeAdd)
 
@@ -679,26 +709,26 @@ class DroplyClient {
         val attempt = runCatching {
             val created = factory()
             sock = created
-            pendingConnectingSocket = created
+            pendingConnectingSockets.add(created)
             created.connect(InetSocketAddress(candidate.host, candidate.port), connectTimeoutMs)
             created.tcpNoDelay = true
             created.keepAlive = true
             created.sendBufferSize = DroplyProtocol.CHUNK_SIZE * 2
             created
         }
-        pendingConnectingSocket = null
+        sock?.let { pendingConnectingSockets.remove(it) }
         if (attempt.isFailure) {
             runCatching { sock?.close() }
         }
         return attempt
     }
 
-    private fun tryConnectCandidates(
+    private suspend fun tryConnectCandidates(
         candidates: List<EndpointCandidate>,
         wifiNetworks: List<Network>,
         connectTimeoutMs: Int,
         triedOut: MutableSet<EndpointCandidate>
-    ): Pair<Pair<Socket, EndpointCandidate>?, Exception?> {
+    ): Pair<Pair<Socket, EndpointCandidate>?, Exception?> = coroutineScope {
         var preferredWifiError: Exception? = null
         var fallbackError: Exception? = null
 
@@ -709,17 +739,33 @@ class DroplyClient {
                 factories.add(true to { net.socketFactory.createSocket() })
                 factories.add(true to { Socket().also { sock -> net.bindSocket(sock) } })
             }
-            if (wifiNetworks.isEmpty()) {
-                factories.add(false to { Socket() })
+            // Also race an unbound socket simultaneously so dead routes fail in ~1 timeout window instead of 3x
+            factories.add(false to { Socket() })
+
+            val winner = CompletableDeferred<Pair<Socket, EndpointCandidate>?>()
+            val results = factories.map { (isWifiBound, factory) ->
+                async(Dispatchers.IO) {
+                    val attempt = connectAttempt(factory, candidate, connectTimeoutMs)
+                    if (attempt.isSuccess) {
+                        val connected = attempt.getOrThrow()
+                        if (winner.complete(connected to candidate)) {
+                            closePendingConnectingSockets(except = connected)
+                        } else {
+                            runCatching { connected.close() }
+                        }
+                    }
+                    isWifiBound to attempt
+                }
+            }.awaitAll()
+
+            if (winner.isCompleted) {
+                val chosen = winner.getCompleted()
+                if (chosen != null) return@coroutineScope chosen to null
             }
 
-            for ((isWifiBound, factory) in factories) {
-                val attempt = connectAttempt(factory, candidate, connectTimeoutMs)
-                if (attempt.isSuccess) {
-                    return (attempt.getOrThrow() to candidate) to null
-                }
-                val err = attempt.exceptionOrNull() as? Exception
-                val errMsg = err?.message.orEmpty()
+            for ((isWifiBound, attempt) in results) {
+                val err = attempt.exceptionOrNull() as? Exception ?: continue
+                val errMsg = err.message.orEmpty()
                 val isRealRefused = err is ConnectException && errMsg.contains("ECONNREFUSED", ignoreCase = true)
                 if (isWifiBound) {
                     if (preferredWifiError == null || isRealRefused || err is SocketTimeoutException) {
@@ -729,19 +775,8 @@ class DroplyClient {
                     fallbackError = err
                 }
             }
-
-            // Last-resort unbound attempt only if all Wi-Fi-bound sockets failed and might be blocked by vendor policy
-            if (wifiNetworks.isNotEmpty()) {
-                val unboundAttempt = connectAttempt({ Socket() }, candidate, connectTimeoutMs)
-                if (unboundAttempt.isSuccess) {
-                    return (unboundAttempt.getOrThrow() to candidate) to null
-                }
-                if (fallbackError == null) {
-                    fallbackError = unboundAttempt.exceptionOrNull() as? Exception
-                }
-            }
         }
-        return null to (preferredWifiError ?: fallbackError)
+        null to (preferredWifiError ?: fallbackError)
     }
 
     suspend fun connect(context: Context, payload: QRPairingPayload) = withContext(Dispatchers.IO) {
@@ -758,7 +793,7 @@ class DroplyClient {
                 val orderedHosts = prioritizeHosts(payload.hosts, wifiInfo.localIpv4Prefixes)
                 val initialCandidates = orderedHosts.map { EndpointCandidate(host = it, port = payload.port) }
                 val tried = LinkedHashSet<EndpointCandidate>()
-                val perAttemptTimeout = if (initialCandidates.size > 1) 3000 else 4500
+                val perAttemptTimeout = if (initialCandidates.size > 1) 2600 else 3200
 
                 var (connectedPair, lastError) = tryConnectCandidates(
                     candidates = initialCandidates,
@@ -886,6 +921,7 @@ class DroplyClient {
                     host = connectedHost,
                     port = connectedPort
                 )
+                _canRetryConnect.value = false
                 syncBackgroundService()
                 _statusMessage.value = "Подключено к ${authResult.deviceName} (AES-256-GCM)"
 
@@ -895,6 +931,7 @@ class DroplyClient {
                 startHeartbeat(newSocket)
             } catch (e: Exception) {
                 disconnectInternal(notifyPeer = false)
+                _canRetryConnect.value = lastPairingPayload != null
                 _errorMessage.value = formatConnectError(e, payload.host, payload.port, wifiInfo)
             }
         }
@@ -972,7 +1009,7 @@ class DroplyClient {
             )
         val isTimeout = e is SocketTimeoutException
         val phoneIpLabel = wifiInfo.primaryIpv4 ?: "не определён"
-        val diagFooter = "\n(${e.javaClass.simpleName}: ${msg.ifBlank { "error" }.take(90)} · Wi-Fi: $phoneIpLabel)"
+        val diagFooter = "\n(${e.javaClass.simpleName}: ${msg.ifBlank { "error" }.take(180)} · Wi-Fi: $phoneIpLabel)"
 
         if ((isNoRoute || isTimeout || isPermissionDenied) &&
             wifiInfo.primaryIpv4 != null &&
@@ -1485,17 +1522,15 @@ class DroplyClient {
         val out = outputStream
         val cipher = sessionCipher
         val sock = socket
-        val pendingSock = pendingConnectingSocket
         outputStream = null
         sessionCipher = null
         socket = null
-        pendingConnectingSocket = null
+        closePendingConnectingSockets()
         if (notifyPeer && out != null && cipher != null) {
             runCatching {
                 FrameCodec.writeEncryptedJsonFrame(out, cipher, FrameType.DISCONNECT, JSONObject())
             }
         }
-        runCatching { pendingSock?.close() }
         runCatching { sock?.close() }
         _isTransferring.value = false
         _progress.value = null
