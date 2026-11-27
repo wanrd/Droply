@@ -19,6 +19,9 @@ Android/.idea/
 Android/*.iml
 Android/.kotlin/
 *.hprof
+*.jks
+*.keystore
+Android/keystore.properties
 
 # Temporary / editor files
 *.log
