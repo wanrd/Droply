@@ -3,7 +3,9 @@ package com.droply.android.ui
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -71,6 +73,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
@@ -205,8 +208,20 @@ fun DroplyScreen(
         }
     }
 
+    val isOverlayOpen = showSettings ||
+        (showUpdatePrompt && availableUpdate != null) ||
+        incomingRequest != null ||
+        pendingConfirmation != null
+    val backgroundBlur by animateDpAsState(
+        targetValue = if (isOverlayOpen) 10.dp else 0.dp,
+        animationSpec = tween(durationMillis = 260, easing = FastOutSlowInEasing),
+        label = "overlayBlur"
+    )
+
     Scaffold(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier
+            .fillMaxSize()
+            .then(if (backgroundBlur > 0.5.dp) Modifier.blur(backgroundBlur) else Modifier),
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             TopHeaderBar(
@@ -869,6 +884,69 @@ private fun FrostedGlassPillButton(
     )
 }
 
+@Composable
+private fun SettingsRowCard(
+    icon: ImageVector,
+    title: String,
+    subtitle: String? = null,
+    subtitleAccent: Boolean = false,
+    control: @Composable () -> Unit
+) {
+    val accent = MaterialTheme.colorScheme.primary
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        border = BorderStroke(0.9.dp, MaterialTheme.colorScheme.outline),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 13.dp, vertical = 11.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(11.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(32.dp)
+                    .clip(RoundedCornerShape(9.dp))
+                    .background(accent.copy(alpha = 0.16f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = accent,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(1.dp)
+            ) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                if (subtitle != null) {
+                    Text(
+                        text = subtitle,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (subtitleAccent) accent else MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+
+            control()
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SettingsBottomSheet(
@@ -889,7 +967,6 @@ private fun SettingsBottomSheet(
     onDismiss: () -> Unit
 ) {
     var nameDraft by remember(deviceName) { mutableStateOf(deviceName) }
-    val sheetBase = MaterialTheme.colorScheme.surface
 
     ModalBottomSheet(
         onDismissRequest = {
@@ -897,13 +974,13 @@ private fun SettingsBottomSheet(
             onDismiss()
         },
         containerColor = Color.Transparent,
-        scrimColor = Color.Black.copy(alpha = if (isDarkTheme) 0.52f else 0.24f),
+        scrimColor = Color.Black.copy(alpha = if (isDarkTheme) 0.44f else 0.22f),
         dragHandle = null
     ) {
-        FrostedGlassBlock(
-            isDarkTheme = isDarkTheme,
-            cornerRadius = 26.dp,
-            baseColor = sheetBase,
+        Surface(
+            shape = RoundedCornerShape(24.dp),
+            color = MaterialTheme.colorScheme.surface,
+            border = BorderStroke(0.9.dp, MaterialTheme.colorScheme.outline),
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 12.dp, vertical = 8.dp)
@@ -913,7 +990,7 @@ private fun SettingsBottomSheet(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 18.dp, vertical = 14.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Box(
                     modifier = Modifier
@@ -921,15 +998,37 @@ private fun SettingsBottomSheet(
                         .width(36.dp)
                         .height(4.dp)
                         .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.32f))
+                        .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.34f))
                 )
 
-                Text(
-                    text = "Настройки",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = "Настройки",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+
+                    FrostedGlassPillButton(
+                        isDarkTheme = isDarkTheme,
+                        onClick = {
+                            onUpdateDeviceName(nameDraft)
+                            onDismiss()
+                        },
+                        contentPadding = PaddingValues(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = MacIcons.Xmark,
+                            contentDescription = "Закрыть",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(14.dp)
+                        )
+                    }
+                }
 
                 AnimatedVisibility(
                     visible = errorMessage != null || statusMessage != null,
@@ -944,80 +1043,69 @@ private fun SettingsBottomSheet(
                 }
 
                 // 1. Theme toggle
-                FrostedGlassBlock(
-                    isDarkTheme = isDarkTheme,
-                    cornerRadius = 18.dp,
-                    modifier = Modifier.fillMaxWidth()
+                SettingsRowCard(
+                    icon = if (isDarkTheme) MacIcons.SunMaxFill else MacIcons.MoonFill,
+                    title = "Тема оформления",
+                    subtitle = if (isDarkTheme) "Тёмная" else "Светлая"
                 ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 14.dp, vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
+                    FrostedGlassPillButton(
+                        isDarkTheme = isDarkTheme,
+                        onClick = onToggleTheme
                     ) {
-                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                            Text(
-                                text = "Тема оформления",
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.Medium,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            Text(
-                                text = if (isDarkTheme) "Тёмная" else "Светлая",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-
-                        FrostedGlassPillButton(
-                            isDarkTheme = isDarkTheme,
-                            onClick = onToggleTheme
-                        ) {
-                            AnimatedContent(
-                                targetState = isDarkTheme,
-                                transitionSpec = {
-                                    (scaleIn(spring(dampingRatio = 0.78f)) + fadeIn(tween(200))) togetherWith
-                                        (scaleOut(tween(120)) + fadeOut(tween(120)))
-                                },
-                                label = "settingsThemeIcon"
-                            ) { dark ->
-                                Icon(
-                                    imageVector = if (dark) MacIcons.SunMaxFill else MacIcons.MoonFill,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.onSurface,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                            }
-                            Spacer(modifier = Modifier.width(7.dp))
-                            Text(
-                                text = if (isDarkTheme) "Светлая" else "Тёмная",
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.SemiBold,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                        }
+                        Icon(
+                            imageVector = if (isDarkTheme) MacIcons.SunMaxFill else MacIcons.MoonFill,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.size(15.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = if (isDarkTheme) "Светлая" else "Тёмная",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
                     }
                 }
 
                 // 2. Device name
-                FrostedGlassBlock(
-                    isDarkTheme = isDarkTheme,
-                    cornerRadius = 18.dp,
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    border = BorderStroke(0.9.dp, MaterialTheme.colorScheme.outline),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 14.dp, vertical = 12.dp),
+                            .padding(horizontal = 13.dp, vertical = 11.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Text(
-                            text = "Имя устройства",
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.Medium,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(11.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .clip(RoundedCornerShape(9.dp))
+                                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = MacIcons.Smartphone,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                            Text(
+                                text = "Имя устройства",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
                         OutlinedTextField(
                             value = nameDraft,
                             onValueChange = { next ->
@@ -1029,7 +1117,7 @@ private fun SettingsBottomSheet(
                             },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(12.dp),
+                            shape = RoundedCornerShape(11.dp),
                             colors = OutlinedTextFieldDefaults.colors(
                                 focusedContainerColor = MaterialTheme.colorScheme.surface,
                                 unfocusedContainerColor = MaterialTheme.colorScheme.surface,
@@ -1041,107 +1129,51 @@ private fun SettingsBottomSheet(
                 }
 
                 // 3. Confirm before receiving files
-                FrostedGlassBlock(
-                    isDarkTheme = isDarkTheme,
-                    cornerRadius = 18.dp,
-                    modifier = Modifier.fillMaxWidth()
+                SettingsRowCard(
+                    icon = MacIcons.CheckmarkShield,
+                    title = "Подтверждать приём",
+                    subtitle = "Спрашивать перед получением файлов"
                 ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 14.dp, vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Column(
-                            modifier = Modifier
-                                .weight(1f)
-                                .padding(end = 12.dp),
-                            verticalArrangement = Arrangement.spacedBy(2.dp)
-                        ) {
-                            Text(
-                                text = "Подтверждать приём",
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.Medium,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            Text(
-                                text = "Спрашивать перед получением файлов",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        Switch(
-                            checked = requireIncomingConfirmation,
-                            onCheckedChange = onUpdateRequireIncomingConfirmation
-                        )
-                    }
+                    Switch(
+                        checked = requireIncomingConfirmation,
+                        onCheckedChange = onUpdateRequireIncomingConfirmation
+                    )
                 }
 
                 // 4. App updates
-                FrostedGlassBlock(
-                    isDarkTheme = isDarkTheme,
-                    cornerRadius = 18.dp,
-                    modifier = Modifier.fillMaxWidth()
+                SettingsRowCard(
+                    icon = MacIcons.ArrowDownCircle,
+                    title = "Обновление приложения",
+                    subtitle = availableUpdate?.let { "Доступна версия ${it.latestVersion}" }
+                        ?: "Версия $currentVersionLabel",
+                    subtitleAccent = availableUpdate != null
                 ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 14.dp, vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Column(
-                            modifier = Modifier
-                                .weight(1f)
-                                .padding(end = 12.dp),
-                            verticalArrangement = Arrangement.spacedBy(2.dp)
-                        ) {
-                            Text(
-                                text = "Обновление приложения",
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.Medium,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            Text(
-                                text = availableUpdate?.let { "Доступна версия ${it.latestVersion}" }
-                                    ?: "Версия $currentVersionLabel",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = if (availableUpdate != null) {
-                                    MaterialTheme.colorScheme.primary
-                                } else {
-                                    MaterialTheme.colorScheme.onSurfaceVariant
-                                }
-                            )
-                        }
-
-                        FrostedGlassPillButton(
-                            isDarkTheme = isDarkTheme,
-                            enabled = !isCheckingUpdates,
-                            accentTint = if (availableUpdate != null) MaterialTheme.colorScheme.primary else null,
-                            onClick = {
-                                if (availableUpdate != null) {
-                                    onOpenUpdatePrompt()
-                                } else {
-                                    onCheckForUpdates()
-                                }
+                    FrostedGlassPillButton(
+                        isDarkTheme = isDarkTheme,
+                        enabled = !isCheckingUpdates,
+                        accentTint = if (availableUpdate != null) MaterialTheme.colorScheme.primary else null,
+                        onClick = {
+                            if (availableUpdate != null) {
+                                onOpenUpdatePrompt()
+                            } else {
+                                onCheckForUpdates()
                             }
-                        ) {
-                            Text(
-                                text = when {
-                                    availableUpdate != null -> "Обновить"
-                                    isCheckingUpdates -> "Поиск..."
-                                    else -> "Проверить"
-                                },
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.SemiBold,
-                                color = if (availableUpdate != null) {
-                                    MaterialTheme.colorScheme.primary
-                                } else {
-                                    MaterialTheme.colorScheme.onSurface
-                                }
-                            )
                         }
+                    ) {
+                        Text(
+                            text = when {
+                                availableUpdate != null -> "Обновить"
+                                isCheckingUpdates -> "Поиск..."
+                                else -> "Проверить"
+                            },
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (availableUpdate != null) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.onSurface
+                            }
+                        )
                     }
                 }
             }

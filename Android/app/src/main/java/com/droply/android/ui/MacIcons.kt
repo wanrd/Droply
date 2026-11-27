@@ -565,4 +565,31 @@ object MacIcons {
             }
         }
     }
+
+    // SF "iphone" (Device name row in Settings)
+    val Smartphone: ImageVector by lazy {
+        icon("MacSmartphone") {
+            strokePath(lineWidth = 1.85f) {
+                roundedRect(7f, 2.8f, 17f, 21.2f, 2.3f)
+                moveTo(10.6f, 5.4f); lineTo(13.4f, 5.4f)
+                moveTo(10.8f, 18.6f); lineTo(13.2f, 18.6f)
+            }
+        }
+    }
+
+    // SF "checkmark.shield" (Confirm incoming row in Settings)
+    val CheckmarkShield: ImageVector by lazy {
+        icon("MacCheckmarkShield") {
+            strokePath(lineWidth = 1.85f) {
+                moveTo(12f, 3.0f)
+                lineTo(19.2f, 5.6f)
+                lineTo(19.2f, 11.4f)
+                quadTo(19.2f, 17.0f, 12f, 20.9f)
+                quadTo(4.8f, 17.0f, 4.8f, 11.4f)
+                lineTo(4.8f, 5.6f)
+                close()
+                moveTo(8.9f, 11.9f); lineTo(11.1f, 14.1f); lineTo(15.4f, 9.7f)
+            }
+        }
+    }
 }
